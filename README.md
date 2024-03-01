@@ -1,5 +1,5 @@
 
-Control the PWM of your laptop cooling pad fan, based on your Windows CPU/GPU temperatures, taken from AIDA64, using ESP32 via USB.
+Control the PWM of your laptop cooling pad fan using ESP32 via USB, based on your Windows CPU/GPU temperatures, taken from AIDA64.
 
 ### How it works
 - Gets temperatures from AIDA64
