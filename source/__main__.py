@@ -63,10 +63,10 @@ def main():
             cpu_dimmer = calculate_dimmer_value(cpu_temp)
             gpu_dimmer = calculate_dimmer_value(gpu_temp)
 
-            new_value = max(cpu_dimmer, gpu_dimmer) or DIMMER_DEFAULT_SPEED
+            new_value = max(cpu_dimmer, gpu_dimmer) or PWM_DEFAULT
 
             if dimmer != new_value:
-                logging.info(f"CPU: {cpu_temp}, GPU: {gpu_temp}. {DIMMER_COMMAND}: {dimmer} -> {new_value}")
+                logging.info(f"CPU: {cpu_temp}, GPU: {gpu_temp}. {PWM_COMMAND}: {dimmer} -> {new_value}")
                 device.set_dimmer_value(new_value)
         else:
             logging.info(f"No Serial Device found. Sleeping {DELAY}")

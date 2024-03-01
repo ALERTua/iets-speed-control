@@ -23,7 +23,7 @@ def require_connection(func):
 
 
 class SerialDevice:
-    def __init__(self, port=DEFAULT_PORT, baudrate=DEFAULT_BAUDRATE, dimmer_command=DIMMER_COMMAND, timeout=1):
+    def __init__(self, port=DEFAULT_PORT, baudrate=SERIAL_BAUDRATE, dimmer_command=PWM_COMMAND, timeout=1):
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
