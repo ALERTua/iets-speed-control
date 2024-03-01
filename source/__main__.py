@@ -5,9 +5,10 @@ from typing import List
 from wmi import WMI
 from serial.tools.list_ports_common import ListPortInfo
 from serial.tools.list_ports_windows import comports
+
+from source.util.env import *  # import dotenv first
+from source.util.logger import logger_setup  # import dotenv first
 from source.entities.serial_device import SerialDevice
-from source.util.env import *
-from source.util.logger import logger_setup
 
 
 def calculate_dimmer_value(temperature):
