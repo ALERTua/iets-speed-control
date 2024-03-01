@@ -75,6 +75,5 @@ def main():
         time.sleep(DELAY)
 
 
-# Example usage:
 if __name__ == "__main__":
     main()
