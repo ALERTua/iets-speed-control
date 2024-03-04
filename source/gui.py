@@ -3,6 +3,7 @@ from typing import List
 from pathlib import Path
 import wx
 from wxasync import AsyncBind, WxAsyncApp, StartCoroutine
+from wx.adv import TaskBarIcon as TaskBarIcon
 import asyncio
 
 from source.util.env import *  # import dotenv first
@@ -20,6 +21,42 @@ class Step(Enum):
     CONNECTED = 2
 
 
+class MyTaskBarIcon(TaskBarIcon):
+    def __init__(self, frame):
+        TaskBarIcon.__init__(self)
+
+        self.frame = frame
+
+        self.SetIcon(wx.Icon('../media/icon.png', wx.BITMAP_TYPE_PNG), 'Task bar icon')
+
+        # ------------
+
+        self.Bind(wx.EVT_MENU, self.OnTaskBarActivate, id=1)
+        self.Bind(wx.EVT_MENU, self.OnTaskBarDeactivate, id=2)
+        self.Bind(wx.EVT_MENU, self.OnTaskBarClose, id=3)
+
+    # -----------------------------------------------------------------------
+
+    def CreatePopupMenu(self):
+        menu = wx.Menu()
+        menu.Append(1, 'Show')
+        menu.Append(2, 'Hide')
+        menu.Append(3, 'Close')
+
+        return menu
+
+    def OnTaskBarClose(self, event):
+        self.frame.Close()
+
+    def OnTaskBarActivate(self, event):
+        if not self.frame.IsShown():
+            self.frame.Show()
+
+    def OnTaskBarDeactivate(self, event):
+        if self.frame.IsShown():
+            self.frame.Hide()
+
+
 class TestFrame(wx.Frame):
     def __init__(self, parent=None):
         super(TestFrame, self).__init__(parent)
@@ -30,6 +67,10 @@ class TestFrame(wx.Frame):
             icon = wx.Icon(str(icon_path), wx.BITMAP_TYPE_ANY, -1, -1)
             self.SetIcon(icon)
 
+        self.tskic = MyTaskBarIcon(self)
+        self.Bind(wx.EVT_CLOSE, self.OnClose)
+        self.Bind(wx.EVT_ICONIZE, self.draw)
+
         self.step_label = None
         self.port_label = None
         self.progressbar = None
@@ -38,8 +79,7 @@ class TestFrame(wx.Frame):
         self.cpu_value = None
         self.cpu_label = None
 
-        self.sizer()
-        self.Layout()
+        self.draw()
 
         self.serial_device = SerialDevice()
         self._step = Step.INIT
@@ -48,6 +88,16 @@ class TestFrame(wx.Frame):
         self._gpu_temp = 0
 
         self.start()
+
+    def draw(self, *args, **kwargs):
+        self.sizer()
+
+        self.Layout()
+        self.Centre()
+
+    def OnClose(self, event):
+        self.tskic.Destroy()
+        self.Destroy()
 
     def start(self):
         StartCoroutine(self.loop_connect, self)
@@ -63,12 +113,14 @@ class TestFrame(wx.Frame):
         row = 0
         column = 0
 
+        column += 1
+
         self.cpu_label = wx.StaticText(self, label='CPU', style=wx.ALIGN_CENTRE_HORIZONTAL)
         sizer.Add(self.cpu_label, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
 
         column += 1
 
-        self.cpu_value = wx.StaticText(self, label='0', style=wx.ALIGN_CENTRE_HORIZONTAL)
+        self.cpu_value = wx.StaticText(self, style=wx.ALIGN_CENTRE_HORIZONTAL)
         sizer.Add(self.cpu_value, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
 
         column += 3
@@ -78,7 +130,7 @@ class TestFrame(wx.Frame):
 
         column += 1
 
-        self.gpu_value = wx.StaticText(self, label='0', style=wx.ALIGN_CENTRE_HORIZONTAL)
+        self.gpu_value = wx.StaticText(self, style=wx.ALIGN_CENTRE_HORIZONTAL)
         sizer.Add(self.gpu_value, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
 
         row += 1
@@ -90,12 +142,11 @@ class TestFrame(wx.Frame):
 
         row += 1
         column = 0
-        self.step_label = wx.StaticText(self, label=Step.INIT.name,
-                                        style=wx.ALIGN_CENTRE_HORIZONTAL)
+        self.step_label = wx.StaticText(self, style=wx.ALIGN_CENTRE_HORIZONTAL)
         sizer.Add(self.step_label, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
 
-        self.port_label = wx.StaticText(self, label='PORT', style=wx.ALIGN_CENTRE_HORIZONTAL)
-        sizer.Add(self.port_label, pos=(row, sizer.GetCols() - 1), span=(1, 1), flag=wx.ALIGN_CENTRE)
+        self.port_label = wx.StaticText(self, style=wx.ALIGN_CENTRE_HORIZONTAL)
+        sizer.Add(self.port_label, pos=(row, sizer.GetCols() - 2), span=(1, 1), flag=wx.ALIGN_CENTRE)
 
         sizer.Fit(self)
         self.SetSizer(sizer)
