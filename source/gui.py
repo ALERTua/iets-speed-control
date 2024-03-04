@@ -136,8 +136,7 @@ class TestFrame(wx.Frame):
         row += 1
         column = 0
 
-        self.progressbar = wx.Gauge(self, id=wx.ID_ANY, range=100, pos=wx.DefaultPosition, size=wx.DefaultSize,
-                                    style=wx.GA_HORIZONTAL)
+        self.progressbar = wx.Gauge(self)
         sizer.Add(self.progressbar, pos=(row, column), span=(1, sizer.GetCols()), flag=wx.ALIGN_CENTRE)
 
         row += 1
