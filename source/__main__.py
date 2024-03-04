@@ -1,42 +1,17 @@
 # -*- coding: utf-8 -*-
-import logging
 import time
 from typing import List
-from wmi import WMI
+
 from serial.tools.list_ports_common import ListPortInfo
 from serial.tools.list_ports_windows import comports
 
 from source.util.env import *  # import dotenv first
-from source.util.logger import logger_setup  # import dotenv first
+from source.util.sensors import get_sensors
+from source.util.tools import calculate_dimmer_value
 from source.entities.serial_device import SerialDevice
 
 
-def calculate_dimmer_value(temperature):
-    # Calculate dimmer value based on temperature
-    if temperature < MIN_TEMP:
-        return 0
-    elif temperature > MAX_TEMP:
-        return 100
-    else:
-        return int(((temperature - MIN_TEMP) / (MAX_TEMP - MIN_TEMP)) * 100)
-
-
-def get_sensors():
-    wmi_obj = WMI(namespace="root\\WMI")
-    output = {}
-    try:
-        sensor_values = wmi_obj.AIDA64_SensorValues()
-    except:
-        logging.error("Error connecting to AIDA64")
-        return output
-
-    for v in sensor_values:
-        output[v.wmi_property('Label').Value] = v.wmi_property('Value').Value
-    return output
-
-
 def main():
-    logger_setup()
     device = SerialDevice()
     while True:
         if not device.connected:

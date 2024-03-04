@@ -25,5 +25,8 @@ Example: [ESP32_Tasmota](docs/ESP32_Tasmota.md)
 ### Script Preparation
 - Create `.env` and fill it using [.env.example](.env.example)
 
-### Execution
+### Script Execution
+#### GUI
+- Use pre-built binaries or run [build.cmd](build.cmd)
+#### Console
 - Run [run.cmd](run.cmd) or `python -m source`

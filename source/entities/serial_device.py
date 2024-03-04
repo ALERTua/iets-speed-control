@@ -1,5 +1,4 @@
 import json
-import logging
 import re
 import time
 from typing import Optional
@@ -52,6 +51,8 @@ class SerialDevice:
             except serial.SerialException as e:
                 logging.error(f"Error: Unable to connect to {self.port}. {e}")
                 self.reset()
+                return False
+        return True
 
     def disconnect(self):
         try:

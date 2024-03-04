@@ -1,13 +1,17 @@
 [tool.poetry]
 package-mode = false
+name = 'iets-speed-control'
 readme = 'README.md'
 
 [tool.poetry.dependencies]
-python = "^3.12.2"
+python = "^3.12.2,<3.13"
 python-dotenv = "^1.0.1"
 WMI = "^1.5.1"
-colorlog = "^6.8.2"
 pyserial = "^3.5"
+wxasync = "^0.49"
+
+[tool.poetry.group.dev.dependencies]
+pyinstaller = "^6.4.0"
 
 [build-system]
 requires = ["poetry-core>=0.9.0"]

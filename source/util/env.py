@@ -1,4 +1,6 @@
 import os
+from source.util.logger import logger_setup
+import logging  # has to be here
 try:
     # noinspection PyUnresolvedReferences
     from distutils.util import strtobool
@@ -11,6 +13,9 @@ load_dotenv()
 
 
 VERBOSE = strtobool(os.getenv('VERBOSE', 'False'))
+
+logger_setup()
+logging.debug(f"env verbose: {VERBOSE}")
 
 DEVICE_NAME = os.getenv('DEVICE_NAME', 'USB-Enhanced-SERIAL CH9102')
 DEFAULT_PORT = os.getenv('DEFAULT_PORT', 'COM7')
