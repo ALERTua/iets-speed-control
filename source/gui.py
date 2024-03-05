@@ -1,9 +1,10 @@
 from enum import Enum
-from typing import List
+from typing import List, Optional
 from pathlib import Path
 import wx
 from wxasync import AsyncBind, WxAsyncApp, StartCoroutine
 from wx.adv import TaskBarIcon as TaskBarIcon
+from wx.lib.agw.pygauge import PyGauge
 import asyncio
 
 from source.util.env import *  # import dotenv first
@@ -73,7 +74,7 @@ class TestFrame(wx.Frame):
 
         self.step_label = None
         self.port_label = None
-        self.progressbar = None
+        self.progressbar: Optional[PyGauge] = None
         self.gpu_value = None
         self.gpu_label = None
         self.cpu_value = None
@@ -136,7 +137,11 @@ class TestFrame(wx.Frame):
         row += 1
         column = 0
 
-        self.progressbar = wx.Gauge(self)
+        self.progressbar = PyGauge(self, range=100, size=(150, 18), style=wx.GA_HORIZONTAL)
+        self.progressbar.SetDrawValue(draw=True, drawPercent=True, font=None, colour=wx.BLACK, formatString=None)
+        # self.progressbar.SetBackgroundColour(wx.BLACK)
+        # self.progressbar.SetBorderColor(wx.BLACK)
+        self.progressbar.SetBarColour(wx.GREEN)
         sizer.Add(self.progressbar, pos=(row, column), span=(1, sizer.GetCols()), flag=wx.ALIGN_CENTRE)
 
         row += 1
@@ -195,10 +200,25 @@ class TestFrame(wx.Frame):
     async def loop_update_progressbar(self):
         while True:
             if self.step.value >= Step.CONNECTED.value:
-                self.progressbar.SetValue(self.dimmer)
+                self.progress = self.dimmer
             else:
                 logging.debug(f"update_progressbar pause: {self.step} < {Step.CONNECTED.value}")
             await asyncio.sleep(1)
+
+    @property
+    def progress(self) -> int:
+        return self.progressbar.GetValue()
+
+    @progress.setter
+    def progress(self, value):
+        current_value = self.progress
+        new_value = value - current_value
+        # logging.debug(f"Progressbar {current_value}->{_value}")
+        self.progressbar.Update(new_value, 100)
+
+    # if self.progress != value:
+        #     # self.progressbar.Update(_value, 100)
+        #     self.progressbar.SetValue(value)
 
     @property
     def dimmer(self):
