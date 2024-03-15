@@ -87,9 +87,23 @@ class SpeedControlFrame(wx.Frame):
 
         StartCoroutine(self.draw(), self)
         self.SetMaxSize(self.Size)
-        self.Centre()
-
+        # self.Centre()
+        self.LoadWindowPosition()
         self.start()
+
+    def LoadWindowPosition(self):
+        config = wx.Config('MyApp')  # Use your own app name
+        x = config.ReadInt('WindowPosX', -1)
+        y = config.ReadInt('WindowPosY', -1)
+        if x != -1 and y != -1:
+            self.SetPosition(wx.Point(x, y))
+
+    def SaveWindowPosition(self):
+        pos = self.GetPosition()
+        config = wx.Config('MyApp')
+        config.WriteInt('WindowPosX', pos.x)
+        config.WriteInt('WindowPosY', pos.y)
+        config.Flush()
 
     async def draw(self, *args, **kwargs):
         self.sizer()
@@ -98,16 +112,14 @@ class SpeedControlFrame(wx.Frame):
 
     async def OnClose(self, event):
         logging.debug("OnClose")
+        self.SaveWindowPosition()
         self.tskic.Destroy()
         self.Destroy()
+        event.Skip()  # Allow the window to close normally
 
     def start(self):
         logging.debug("start")
         StartCoroutine(self.loop_connect, self)
-        StartCoroutine(self.loop_read_sensors_start, self)
-        StartCoroutine(self.loop_read_dimmer, self)
-        StartCoroutine(self.loop_update_progressbar, self)
-        StartCoroutine(self.loop_set_dimmer, self)
 
     def sizer(self):
         sizer = wx.GridBagSizer(5, 5)
@@ -180,40 +192,6 @@ class SpeedControlFrame(wx.Frame):
             if self.progressbar and self.progressbar.Shown:
                 self.progressbar.Hide()
 
-    async def _dimmer_set(self, value):
-        self.serial_device.set_dimmer_value(value)
-
-    async def loop_set_dimmer(self):
-        while True:
-            # logging.debug("set_dimmer")
-            cpu_dimmer = calculate_dimmer_value(self.cpu_temp)
-            gpu_dimmer = calculate_dimmer_value(self.gpu_temp)
-
-            new_value = max(cpu_dimmer, gpu_dimmer) or PWM_DEFAULT
-
-            if self.dimmer != new_value:
-                self.dimmer = new_value
-
-            await asyncio.sleep(DELAY)
-
-    async def loop_read_dimmer(self):
-        while True:
-            # logging.debug("read_dimmer")
-            if self.step.value >= Step.CONNECTED.value:
-                self.dimmer = self.serial_device.read_dimmer_value()
-                # logging.debug(f"dimmer {type(dimmer_value)} {dimmer_value}")
-            else:
-                logging.debug(f"read_dimmer pause: {self.step} < {Step.CONNECTED.value}")
-            await asyncio.sleep(DELAY)
-
-    async def loop_update_progressbar(self):
-        while True:
-            if self.step.value >= Step.CONNECTED.value:
-                self.progress = self.dimmer
-            else:
-                logging.debug(f"update_progressbar pause: {self.step} < {Step.CONNECTED.value}")
-            await asyncio.sleep(1)
-
     @property
     def progress(self) -> int:
         if self.progressbar:
@@ -229,7 +207,7 @@ class SpeedControlFrame(wx.Frame):
         if current_value is not None:
             new_value = value - current_value
         # logging.debug(f"Progressbar {current_value}->{_value}")
-        if self.progressbar:
+        if self.progressbar and new_value:
             self.progressbar.Update(new_value, 100)
 
     @property
@@ -246,7 +224,8 @@ class SpeedControlFrame(wx.Frame):
             logging.info(f"CPU: {self.cpu_temp}, GPU: {self.gpu_temp}."
                          f" {PWM_COMMAND}: {old_dimmer} -> {value}")
 
-            StartCoroutine(self._dimmer_set(value), self)
+            # StartCoroutine(self._dimmer_set(value), self)
+            self.serial_device.set_dimmer_value(value)
         self._dimmer = value
         self.progress = value
 
@@ -286,15 +265,32 @@ class SpeedControlFrame(wx.Frame):
         if self.serial_device.connected:
             logging.debug("connected")
             self.step = Step.CONNECTED
-        # else:
-        #     logging.debug("OnConnect received, but no connection. Retrying")
-        #     StartCoroutine(self.connect(), self)
 
     async def loop_connect(self):
         while True:
             # logging.debug("connect")
-            if self.serial_device.connected:
+            if self.serial_device.connected and self.step != Step.CONNECTED:
                 self.step = Step.CONNECTED
+            elif self.step == Step.CONNECTED and not self.serial_device.connected:
+                logging.debug("Disconnected. Reconnecting")
+                await self.connect()
+            elif self.step == Step.CONNECTED:
+                sensors = get_sensors()
+                cpu_temperatures = {k: int(v) for k, v in sensors.items() if 'CPU' in k}
+                gpu_temperatures = {k: int(v) for k, v in sensors.items() if 'GPU' in k}
+
+                self.cpu_temp = max(cpu_temperatures.values() or [0])
+                self.gpu_temp = max(gpu_temperatures.values() or [0])
+
+                self.dimmer = self.serial_device.read_dimmer_value()
+                self.progress = self.dimmer
+
+                cpu_dimmer = calculate_dimmer_value(self.cpu_temp)
+                gpu_dimmer = calculate_dimmer_value(self.gpu_temp)
+                new_value = max(cpu_dimmer, gpu_dimmer) or PWM_DEFAULT
+
+                if self.dimmer != new_value:
+                    self.dimmer = new_value
             elif self.step == Step.INIT:
                 await self.connect()
             elif self.step == Step.CONNECTING:
@@ -307,32 +303,8 @@ class SpeedControlFrame(wx.Frame):
                     self.serial_device.port = com.device
                     logging.info(f"Serial Device found at {self.serial_device.port}")
                     await self.connect()
-            elif self.step == Step.CONNECTED:
-                if not self.serial_device.connected:
-                    logging.debug("Disconnected. Reconnecting")
-                    await self.connect()
 
-            await asyncio.sleep(DELAY * 3)
-
-    async def _coro_get_sensors(self):
-        return get_sensors()
-
-    def draw_sensors(self, task: asyncio.Task):
-        sensors = task.result()
-        cpu_temperatures = {k: int(v) for k, v in sensors.items() if 'CPU' in k}
-        gpu_temperatures = {k: int(v) for k, v in sensors.items() if 'GPU' in k}
-
-        self.cpu_temp = max(cpu_temperatures.values() or [0])
-        self.gpu_temp = max(gpu_temperatures.values() or [0])
-
-        StartCoroutine(self.loop_read_sensors_start(), self)
-
-    async def loop_read_sensors_start(self):
-        await asyncio.sleep(DELAY)
-        # logging.debug("read_sensors")
-        coro = StartCoroutine(self._coro_get_sensors(), self)
-        coro.add_done_callback(self.draw_sensors)
-
+            await asyncio.sleep(DELAY)
 
 async def main():
     app = WxAsyncApp()
