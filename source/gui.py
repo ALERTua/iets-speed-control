@@ -302,7 +302,7 @@ class TestFrame(wx.Frame):
 
             self.cpu_temp = max(cpu_temperatures.values() or [0])
             self.gpu_temp = max(gpu_temperatures.values() or [0])
-            await asyncio.sleep(1)
+            await asyncio.sleep(DELAY)
 
 
 async def main():
