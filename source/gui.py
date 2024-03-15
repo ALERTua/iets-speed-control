@@ -15,6 +15,8 @@ from source.util.sensors import get_sensors
 from serial.tools.list_ports_common import ListPortInfo
 from serial.tools.list_ports_windows import comports
 
+APP_NAME = 'iets-speed-control'
+
 
 class Step(Enum):
     INIT = 0
@@ -95,12 +97,18 @@ class SpeedControlFrame(wx.Frame):
         config = wx.Config('MyApp')  # Use your own app name
         x = config.ReadInt('WindowPosX', -1)
         y = config.ReadInt('WindowPosY', -1)
-        if x != -1 and y != -1:
+
+        # Get the desktop size
+        desktop = wx.Display().GetClientArea()
+        desktop_width, desktop_height = desktop.GetWidth(), desktop.GetHeight()
+
+        # Check if the saved position is within the desktop area
+        if x != -1 and y != -1 and 0 <= x < desktop_width and 0 <= y < desktop_height:
             self.SetPosition(wx.Point(x, y))
 
     def SaveWindowPosition(self):
         pos = self.GetPosition()
-        config = wx.Config('MyApp')
+        config = wx.Config(APP_NAME)
         config.WriteInt('WindowPosX', pos.x)
         config.WriteInt('WindowPosY', pos.y)
         config.Flush()
