@@ -18,3 +18,13 @@ def get_sensors():
     for v in sensor_values:
         output[v.wmi_property('Label').Value] = v.wmi_property('Value').Value
     return output
+
+
+if __name__ == '__main__':
+    wmi_obj = WMI(namespace="root\\WMI")
+    cls = wmi_obj.get('LENOVO_GAMEZONE_DATA')
+    tmp = cls.GetCPUTemp()
+
+
+
+    pass
