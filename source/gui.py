@@ -169,7 +169,12 @@ class TestFrame(wx.Frame):
         self._step = value
         self.step_label.SetLabel(value.name)
         if value == Step.CONNECTED:
+            if not self.progressbar.Shown:
+                self.progressbar.Show()
             self.port_label.SetLabel(self.serial_device.port)
+        elif value == Step.CONNECTING:
+            if self.progressbar.Shown:
+                self.progressbar.Hide()
 
     async def _dimmer_set(self, value):
         self.serial_device.set_dimmer_value(value)
@@ -211,6 +216,9 @@ class TestFrame(wx.Frame):
 
     @progress.setter
     def progress(self, value):
+        if value is None:
+            return
+
         current_value = self.progress
         new_value = value - current_value
         # logging.debug(f"Progressbar {current_value}->{_value}")
@@ -226,6 +234,9 @@ class TestFrame(wx.Frame):
 
     @dimmer.setter
     def dimmer(self, value):
+        if value is None:
+            return
+
         old_dimmer = self.dimmer
         if old_dimmer != value:
             logging.info(f"CPU: {self.cpu_temp}, GPU: {self.gpu_temp}."
@@ -233,6 +244,7 @@ class TestFrame(wx.Frame):
 
             StartCoroutine(self._dimmer_set(value), self)
         self._dimmer = value
+        self.progress = value
 
     @property
     def cpu_temp(self):
