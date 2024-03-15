@@ -22,7 +22,7 @@ class Step(Enum):
     CONNECTED = 2
 
 
-class MyTaskBarIcon(TaskBarIcon):
+class SpeedControlTaskBarIcon(TaskBarIcon):
     def __init__(self, frame):
         TaskBarIcon.__init__(self)
 
@@ -32,9 +32,9 @@ class MyTaskBarIcon(TaskBarIcon):
 
         # ------------
 
-        self.Bind(wx.EVT_MENU, self.OnTaskBarActivate, id=1)
-        self.Bind(wx.EVT_MENU, self.OnTaskBarDeactivate, id=2)
-        self.Bind(wx.EVT_MENU, self.OnTaskBarClose, id=3)
+        AsyncBind(wx.EVT_MENU, self.OnTaskBarActivate, self.frame, id=1)
+        AsyncBind(wx.EVT_MENU, self.OnTaskBarDeactivate, self.frame, id=2)
+        AsyncBind(wx.EVT_MENU, self.OnTaskBarClose, self.frame, id=3)
 
     # -----------------------------------------------------------------------
 
@@ -43,24 +43,23 @@ class MyTaskBarIcon(TaskBarIcon):
         menu.Append(1, 'Show')
         menu.Append(2, 'Hide')
         menu.Append(3, 'Close')
-
         return menu
 
-    def OnTaskBarClose(self, event):
+    async def OnTaskBarClose(self, event):
         self.frame.Close()
 
-    def OnTaskBarActivate(self, event):
+    async def OnTaskBarActivate(self, event):
         if not self.frame.IsShown():
             self.frame.Show()
 
-    def OnTaskBarDeactivate(self, event):
+    async def OnTaskBarDeactivate(self, event):
         if self.frame.IsShown():
             self.frame.Hide()
 
 
-class TestFrame(wx.Frame):
+class SpeedControlFrame(wx.Frame):
     def __init__(self, parent=None):
-        super(TestFrame, self).__init__(parent)
+        super(SpeedControlFrame, self).__init__(parent)
         self.SetWindowStyle(style=self.GetWindowStyle() ^ wx.RESIZE_BORDER ^ wx.MAXIMIZE_BOX)
 
         icon_path = Path(__file__).parent.parent / 'media/icon.png'
@@ -68,9 +67,9 @@ class TestFrame(wx.Frame):
             icon = wx.Icon(str(icon_path), wx.BITMAP_TYPE_ANY, -1, -1)
             self.SetIcon(icon)
 
-        self.tskic = MyTaskBarIcon(self)
-        self.Bind(wx.EVT_CLOSE, self.OnClose)
-        self.Bind(wx.EVT_ICONIZE, self.draw)
+        self.tskic = SpeedControlTaskBarIcon(self)
+        AsyncBind(wx.EVT_CLOSE, self.OnClose, self)
+        AsyncBind(wx.EVT_ICONIZE, self.draw, self)
 
         self.step_label = None
         self.port_label = None
@@ -80,29 +79,32 @@ class TestFrame(wx.Frame):
         self.cpu_value = None
         self.cpu_label = None
 
-        self.draw()
-
         self.serial_device = SerialDevice()
         self._step = Step.INIT
         self._dimmer = 0
         self._cpu_temp = 0
         self._gpu_temp = 0
 
-        self.start()
-
-    def draw(self, *args, **kwargs):
-        self.sizer()
-
-        self.Layout()
+        StartCoroutine(self.draw(), self)
+        self.SetMaxSize(self.Size)
         self.Centre()
 
-    def OnClose(self, event):
+        self.start()
+
+    async def draw(self, *args, **kwargs):
+        self.sizer()
+        self.GetSizer().Fit(self)
+        self.Layout()
+
+    async def OnClose(self, event):
+        logging.debug("OnClose")
         self.tskic.Destroy()
         self.Destroy()
 
     def start(self):
+        logging.debug("start")
         StartCoroutine(self.loop_connect, self)
-        StartCoroutine(self.loop_read_sensors, self)
+        StartCoroutine(self.loop_read_sensors_start, self)
         StartCoroutine(self.loop_read_dimmer, self)
         StartCoroutine(self.loop_update_progressbar, self)
         StartCoroutine(self.loop_set_dimmer, self)
@@ -167,13 +169,15 @@ class TestFrame(wx.Frame):
 
         logging.debug(f"Step {step_old}->{value.name}")
         self._step = value
-        self.step_label.SetLabel(value.name)
+        if self.step_label:
+            self.step_label.SetLabel(value.name)
         if value == Step.CONNECTED:
-            if not self.progressbar.Shown:
+            if self.progressbar and not self.progressbar.Shown:
                 self.progressbar.Show()
-            self.port_label.SetLabel(self.serial_device.port)
+            if self.port_label:
+                self.port_label.SetLabel(self.serial_device.port)
         elif value == Step.CONNECTING:
-            if self.progressbar.Shown:
+            if self.progressbar and self.progressbar.Shown:
                 self.progressbar.Hide()
 
     async def _dimmer_set(self, value):
@@ -212,21 +216,21 @@ class TestFrame(wx.Frame):
 
     @property
     def progress(self) -> int:
-        return self.progressbar.GetValue()
+        if self.progressbar:
+            return self.progressbar.GetValue()
 
     @progress.setter
     def progress(self, value):
         if value is None:
             return
 
+        new_value = value
         current_value = self.progress
-        new_value = value - current_value
+        if current_value is not None:
+            new_value = value - current_value
         # logging.debug(f"Progressbar {current_value}->{_value}")
-        self.progressbar.Update(new_value, 100)
-
-    # if self.progress != value:
-        #     # self.progressbar.Update(_value, 100)
-        #     self.progressbar.SetValue(value)
+        if self.progressbar:
+            self.progressbar.Update(new_value, 100)
 
     @property
     def dimmer(self):
@@ -254,7 +258,8 @@ class TestFrame(wx.Frame):
     def cpu_temp(self, value):
         if self._cpu_temp != value:
             self._cpu_temp = value
-            self.cpu_value.SetLabel(str(value))
+            if self.cpu_value:
+                self.cpu_value.SetLabel(str(value))
 
     @property
     def gpu_temp(self):
@@ -264,23 +269,35 @@ class TestFrame(wx.Frame):
     def gpu_temp(self, value):
         if self._gpu_temp != value:
             self._gpu_temp = value
-            self.gpu_value.SetLabel(str(value))
+            if self.gpu_value:
+                self.gpu_value.SetLabel(str(value))
 
-    async def _connect(self):
+    async def _coro_connect(self):
         self.serial_device.connect()
+
+    async def connect(self):
+        logging.debug("connecting")
+        self.step = Step.CONNECTING
+
+        coro = StartCoroutine(self._coro_connect(), self)
+        coro.add_done_callback(self.OnConnect)
+
+    def OnConnect(self, event=None):
+        if self.serial_device.connected:
+            logging.debug("connected")
+            self.step = Step.CONNECTED
+        # else:
+        #     logging.debug("OnConnect received, but no connection. Retrying")
+        #     StartCoroutine(self.connect(), self)
 
     async def loop_connect(self):
         while True:
             # logging.debug("connect")
             if self.serial_device.connected:
                 self.step = Step.CONNECTED
-            else:
-                logging.debug(f"connecting")
-                self.step = Step.CONNECTING
-                if self.serial_device.connect():
-                    logging.debug(f"connected")
-                    self.step = Step.CONNECTED
-            if not self.serial_device.connected:
+            elif self.step == Step.INIT:
+                await self.connect()
+            elif self.step == Step.CONNECTING:
                 logging.debug(f"connecting 2")
                 self.step = Step.CONNECTING
                 coms: List[ListPortInfo] = comports()
@@ -289,28 +306,41 @@ class TestFrame(wx.Frame):
                     com = coms_match[0]
                     self.serial_device.port = com.device
                     logging.info(f"Serial Device found at {self.serial_device.port}")
-                    StartCoroutine(self._connect(), self)
-            await asyncio.sleep(DELAY)
+                    await self.connect()
+            elif self.step == Step.CONNECTED:
+                if not self.serial_device.connected:
+                    logging.debug("Disconnected. Reconnecting")
+                    await self.connect()
 
-    async def loop_read_sensors(self):
-        while True:
-            # logging.debug("read_sensors")
-            sensors = get_sensors()
+            await asyncio.sleep(DELAY * 3)
 
-            cpu_temperatures = {k: int(v) for k, v in sensors.items() if 'CPU' in k}
-            gpu_temperatures = {k: int(v) for k, v in sensors.items() if 'GPU' in k}
+    async def _coro_get_sensors(self):
+        return get_sensors()
 
-            self.cpu_temp = max(cpu_temperatures.values() or [0])
-            self.gpu_temp = max(gpu_temperatures.values() or [0])
-            await asyncio.sleep(DELAY)
+    def draw_sensors(self, task: asyncio.Task):
+        sensors = task.result()
+        cpu_temperatures = {k: int(v) for k, v in sensors.items() if 'CPU' in k}
+        gpu_temperatures = {k: int(v) for k, v in sensors.items() if 'GPU' in k}
+
+        self.cpu_temp = max(cpu_temperatures.values() or [0])
+        self.gpu_temp = max(gpu_temperatures.values() or [0])
+
+        StartCoroutine(self.loop_read_sensors_start(), self)
+
+    async def loop_read_sensors_start(self):
+        await asyncio.sleep(DELAY)
+        # logging.debug("read_sensors")
+        coro = StartCoroutine(self._coro_get_sensors(), self)
+        coro.add_done_callback(self.draw_sensors)
 
 
 async def main():
     app = WxAsyncApp()
-    frame = TestFrame()
+    frame = SpeedControlFrame()
     frame.Show()
     app.SetTopWindow(frame)
     await app.MainLoop()
+
 
 if __name__ == '__main__':
     asyncio.run(main())
