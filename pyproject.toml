@@ -12,6 +12,7 @@ wxasync = "^0.49"
 
 [tool.poetry.group.dev.dependencies]
 pyinstaller = "^6.4.0"
+poetry = "^1.8.2"
 
 [build-system]
 requires = ["poetry-core>=0.9.0"]
