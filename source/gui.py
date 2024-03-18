@@ -94,7 +94,8 @@ class SpeedControlFrame(wx.Frame):
         self.start()
 
     def LoadWindowPosition(self):
-        config = wx.Config('MyApp')  # Use your own app name
+        # noinspection PyUnresolvedReferences
+        config = wx.Config(APP_NAME)
         x = config.ReadInt('WindowPosX', -1)
         y = config.ReadInt('WindowPosY', -1)
 
@@ -108,6 +109,7 @@ class SpeedControlFrame(wx.Frame):
 
     def SaveWindowPosition(self):
         pos = self.GetPosition()
+        # noinspection PyUnresolvedReferences
         config = wx.Config(APP_NAME)
         config.WriteInt('WindowPosX', pos.x)
         config.WriteInt('WindowPosY', pos.y)
@@ -207,7 +209,7 @@ class SpeedControlFrame(wx.Frame):
 
     @progress.setter
     def progress(self, value):
-        if value is None:
+        if not value:
             return
 
         new_value = value
@@ -232,8 +234,8 @@ class SpeedControlFrame(wx.Frame):
             logging.info(f"CPU: {self.cpu_temp}, GPU: {self.gpu_temp}."
                          f" {PWM_COMMAND}: {old_dimmer} -> {value}")
 
-            # StartCoroutine(self._dimmer_set(value), self)
-            self.serial_device.set_dimmer_value(value)
+            StartCoroutine(self.serial_device.set_dimmer_value(value), self)
+            # self.serial_device.set_dimmer_value(value)
         self._dimmer = value
         self.progress = value
 
@@ -259,14 +261,11 @@ class SpeedControlFrame(wx.Frame):
             if self.gpu_value:
                 self.gpu_value.SetLabel(str(value))
 
-    async def _coro_connect(self):
-        self.serial_device.connect()
-
     async def connect(self):
         logging.debug("connecting")
         self.step = Step.CONNECTING
 
-        coro = StartCoroutine(self._coro_connect(), self)
+        coro = StartCoroutine(self.serial_device.connect(), self)
         coro.add_done_callback(self.OnConnect)
 
     def OnConnect(self, event=None):
@@ -290,8 +289,8 @@ class SpeedControlFrame(wx.Frame):
                 self.cpu_temp = max(cpu_temperatures.values() or [0])
                 self.gpu_temp = max(gpu_temperatures.values() or [0])
 
-                self.dimmer = self.serial_device.read_dimmer_value()
-                self.progress = self.dimmer
+                dimmer_value = await self.serial_device.read_dimmer_value()
+                self.progress = self.dimmer = dimmer_value
 
                 cpu_dimmer = calculate_dimmer_value(self.cpu_temp)
                 gpu_dimmer = calculate_dimmer_value(self.gpu_temp)
