@@ -48,7 +48,7 @@ async def main():
         else:
             logging.info(f"No Serial Device found. Sleeping {DELAY}")
 
-        time.sleep(DELAY)
+        await asyncio.sleep(DELAY)
 
 
 if __name__ == "__main__":
