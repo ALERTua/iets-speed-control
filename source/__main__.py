@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import asyncio
 import time
 from typing import List
 
@@ -11,11 +12,11 @@ from source.util.tools import calculate_dimmer_value
 from source.entities.serial_device import SerialDevice
 
 
-def main():
+async def main():
     device = SerialDevice()
     while True:
         if not device.connected:
-            device.connect()
+            await device.connect()
 
         if not device.connected:
             coms: List[ListPortInfo] = comports()
@@ -24,10 +25,10 @@ def main():
                 com = coms_match[0]
                 device.port = com.device
                 logging.info(f"Serial Device found at {device.port}")
-                device.connect()
+                await device.connect()
 
         if device.connected:
-            dimmer = device.read_dimmer_value()
+            dimmer = await device.read_dimmer_value()
             sensors = get_sensors()
 
             cpu_temperatures = {k: int(v) for k, v in sensors.items() if 'CPU' in k}
@@ -43,7 +44,7 @@ def main():
 
             if dimmer != new_value:
                 logging.info(f"CPU: {cpu_temp}, GPU: {gpu_temp}. {PWM_COMMAND}: {dimmer} -> {new_value}")
-                device.set_dimmer_value(new_value)
+                await device.set_dimmer_value(new_value)
         else:
             logging.info(f"No Serial Device found. Sleeping {DELAY}")
 
@@ -51,4 +52,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

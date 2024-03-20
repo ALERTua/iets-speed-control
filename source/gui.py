@@ -313,6 +313,7 @@ class SpeedControlFrame(wx.Frame):
 
             await asyncio.sleep(DELAY)
 
+
 async def main():
     app = WxAsyncApp()
     frame = SpeedControlFrame()
