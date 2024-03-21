@@ -21,10 +21,8 @@ def get_sensors():
 
 
 if __name__ == '__main__':
-    wmi_obj = WMI(namespace="root\\WMI")
-    cls = wmi_obj.get('LENOVO_GAMEZONE_DATA')
+    wmi_obj_ = WMI(namespace="root\\WMI")
+    cls = wmi_obj_.get('LENOVO_GAMEZONE_DATA')
     tmp = cls.GetCPUTemp()
-
-
 
     pass

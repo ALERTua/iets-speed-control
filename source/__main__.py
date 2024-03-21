@@ -9,11 +9,11 @@ from serial.tools.list_ports_windows import comports
 from source.util.env import *  # import dotenv first
 from source.util.sensors import get_sensors
 from source.util.tools import calculate_dimmer_value
-from source.entities.serial_device import SerialDevice
+from source.entities.dimmer import Dimmer
 
 
 async def main():
-    device = SerialDevice()
+    device = Dimmer()
     while True:
         if not device.connected:
             await device.connect()
@@ -40,7 +40,7 @@ async def main():
             cpu_dimmer = calculate_dimmer_value(cpu_temp)
             gpu_dimmer = calculate_dimmer_value(gpu_temp)
 
-            new_value = max(cpu_dimmer, gpu_dimmer) or PWM_DEFAULT
+            new_value = max(cpu_dimmer, gpu_dimmer)
 
             if dimmer != new_value:
                 logging.info(f"CPU: {cpu_temp}, GPU: {gpu_temp}. {PWM_COMMAND}: {dimmer} -> {new_value}")

@@ -7,8 +7,8 @@ from wx.adv import TaskBarIcon as TaskBarIcon
 from wx.lib.agw.pygauge import PyGauge
 import asyncio
 
+from source.entities.dimmer import Dimmer
 from source.util.env import *  # import dotenv first
-from source.entities.serial_device import SerialDevice
 from source.util.tools import calculate_dimmer_value
 
 from source.util.sensors import get_sensors
@@ -81,7 +81,7 @@ class SpeedControlFrame(wx.Frame):
         self.cpu_value = None
         self.cpu_label = None
 
-        self.serial_device = SerialDevice()
+        self.serial_device = Dimmer()
         self._step = Step.INIT
         self._dimmer = 0
         self._cpu_temp = 0
@@ -294,7 +294,7 @@ class SpeedControlFrame(wx.Frame):
 
                 cpu_dimmer = calculate_dimmer_value(self.cpu_temp)
                 gpu_dimmer = calculate_dimmer_value(self.gpu_temp)
-                new_value = max(cpu_dimmer, gpu_dimmer) or PWM_DEFAULT
+                new_value = max(cpu_dimmer, gpu_dimmer)
 
                 if self.dimmer != new_value:
                     self.dimmer = new_value

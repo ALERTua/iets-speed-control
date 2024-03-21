@@ -7,7 +7,7 @@ from serial.tools.list_ports_common import ListPortInfo
 from serial.tools.list_ports_windows import comports
 
 from source.util.env import *  # import dotenv first
-from source.entities.serial_device import SerialDevice
+from source.entities.dimmer import Dimmer
 from source.util.tools import calculate_dimmer_value
 from enum import Enum
 
@@ -77,7 +77,7 @@ class Window(tk.Tk):
 
         self.cpu_temp_var: tk.IntVar = tk.IntVar(value=0)
         self.gpu_temp_var: tk.IntVar = tk.IntVar(value=0)
-        self.serial_device = SerialDevice()
+        self.serial_device = Dimmer()
 
         self._step_var: tk.IntVar = tk.IntVar(value=Step.INIT.value)
 
@@ -211,7 +211,7 @@ class Window(tk.Tk):
             cpu_dimmer = calculate_dimmer_value(self.cpu_temp)
             gpu_dimmer = calculate_dimmer_value(self.gpu_temp)
 
-            new_value = max(cpu_dimmer, gpu_dimmer) or PWM_DEFAULT
+            new_value = max(cpu_dimmer, gpu_dimmer)
 
             if self.dimmer != new_value:
                 self.dimmer = new_value

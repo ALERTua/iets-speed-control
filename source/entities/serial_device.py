@@ -4,7 +4,6 @@ import re
 from typing import Optional
 
 import aioserial
-import serial
 
 from source.util.env import *
 
@@ -25,11 +24,10 @@ def require_connection(func):
 
 
 class SerialDevice:
-    def __init__(self, port=DEFAULT_PORT, baudrate=SERIAL_BAUDRATE, dimmer_command=PWM_COMMAND, timeout=0.3):
+    def __init__(self, port=DEFAULT_PORT, baudrate=SERIAL_BAUDRATE, timeout=SERIAL_TIMEOUT):
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
-        self.dimmer_command = dimmer_command
         self.serial: Optional[aioserial.AioSerial] = None
 
     async def __aenter__(self):
@@ -110,23 +108,8 @@ class SerialDevice:
     async def set_field_value(self, field_name, value):
         await self.send_command(f"{field_name} {value}")
 
-    async def read_dimmer_value(self) -> Optional[int]:
-        return await self.read_field_value(self.dimmer_command)
-
-    async def set_dimmer_value(self, value):
-        return await self.set_field_value(self.dimmer_command, value)
-
 
 async def main():
-    sd = SerialDevice()
-    await sd.connect()
-    await sd.send_command(PWM_COMMAND)
-    value = await sd._read_results()
-
-    value_set = await sd.set_dimmer_value(60)
-    value1 = await sd._read_results()
-    value_set2 = await sd.set_dimmer_value(0)
-    value2 = await sd._read_results()
     pass
 
 
