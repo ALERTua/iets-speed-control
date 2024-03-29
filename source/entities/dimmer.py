@@ -4,7 +4,6 @@ from typing import Optional
 from source.util.env import *
 from source.entities.serial_device import SerialDevice
 
-
 logging.basicConfig(level=logging.INFO)
 
 

@@ -123,6 +123,7 @@ class SpeedControlFrame(wx.Frame):
     async def OnClose(self, event):
         logging.debug("OnClose")
         self.SaveWindowPosition()
+        self.dimmer = 0
         self.tskic.Destroy()
         self.Destroy()
         event.Skip()  # Allow the window to close normally
@@ -274,44 +275,47 @@ class SpeedControlFrame(wx.Frame):
             self.step = Step.CONNECTED
 
     async def loop_connect(self):
-        while True:
-            # logging.debug("connect")
-            if self.serial_device.connected and self.step != Step.CONNECTED:
-                self.step = Step.CONNECTED
-            elif self.step == Step.CONNECTED and not self.serial_device.connected:
-                logging.debug("Disconnected. Reconnecting")
-                await self.connect()
-            elif self.step == Step.CONNECTED:
-                sensors = get_sensors()
-                cpu_temperatures = {k: int(v) for k, v in sensors.items() if 'CPU' in k}
-                gpu_temperatures = {k: int(v) for k, v in sensors.items() if 'GPU' in k}
-
-                self.cpu_temp = max(cpu_temperatures.values() or [0])
-                self.gpu_temp = max(gpu_temperatures.values() or [0])
-
-                dimmer_value = await self.serial_device.read_dimmer_value()
-                self.progress = self.dimmer = dimmer_value
-
-                cpu_dimmer = calculate_dimmer_value(self.cpu_temp)
-                gpu_dimmer = calculate_dimmer_value(self.gpu_temp)
-                new_value = max(cpu_dimmer, gpu_dimmer)
-
-                if self.dimmer != new_value:
-                    self.dimmer = new_value
-            elif self.step == Step.INIT:
-                await self.connect()
-            elif self.step == Step.CONNECTING:
-                logging.debug(f"connecting 2")
-                self.step = Step.CONNECTING
-                coms: List[ListPortInfo] = comports()
-                coms_match = [_ for _ in coms if DEVICE_NAME in _.description]
-                if coms_match:
-                    com = coms_match[0]
-                    self.serial_device.port = com.device
-                    logging.info(f"Serial Device found at {self.serial_device.port}")
+        try:
+            while True:
+                # logging.debug("connect")
+                if self.serial_device.connected and self.step != Step.CONNECTED:
+                    self.step = Step.CONNECTED
+                elif self.step == Step.CONNECTED and not self.serial_device.connected:
+                    logging.debug("Disconnected. Reconnecting")
                     await self.connect()
+                elif self.step == Step.CONNECTED:
+                    sensors = get_sensors()
+                    cpu_temperatures = {k: int(v) for k, v in sensors.items() if 'CPU' in k}
+                    gpu_temperatures = {k: int(v) for k, v in sensors.items() if 'GPU' in k}
 
-            await asyncio.sleep(DELAY)
+                    self.cpu_temp = max(cpu_temperatures.values() or [0])
+                    self.gpu_temp = max(gpu_temperatures.values() or [0])
+
+                    dimmer_value = await self.serial_device.read_dimmer_value()
+                    self.progress = self.dimmer = dimmer_value
+
+                    cpu_dimmer = calculate_dimmer_value(self.cpu_temp)
+                    gpu_dimmer = calculate_dimmer_value(self.gpu_temp)
+                    new_value = max(cpu_dimmer, gpu_dimmer)
+
+                    if self.dimmer != new_value:
+                        self.dimmer = new_value
+                elif self.step == Step.INIT:
+                    await self.connect()
+                elif self.step == Step.CONNECTING:
+                    logging.debug(f"connecting 2")
+                    self.step = Step.CONNECTING
+                    coms: List[ListPortInfo] = comports()
+                    coms_match = [_ for _ in coms if DEVICE_NAME in _.description]
+                    if coms_match:
+                        com = coms_match[0]
+                        self.serial_device.port = com.device
+                        logging.info(f"Serial Device found at {self.serial_device.port}")
+                        await self.connect()
+
+                await asyncio.sleep(DELAY)
+        except asyncio.CancelledError:
+            self.dimmer = 0
 
 
 async def main():

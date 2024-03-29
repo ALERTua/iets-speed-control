@@ -14,41 +14,46 @@ from source.entities.dimmer import Dimmer
 
 async def main():
     device = Dimmer()
-    while True:
-        if not device.connected:
-            await device.connect()
-
-        if not device.connected:
-            coms: List[ListPortInfo] = comports()
-            coms_match = [_ for _ in coms if DEVICE_NAME in _.description]
-            if coms_match:
-                com = coms_match[0]
-                device.port = com.device
-                logging.info(f"Serial Device found at {device.port}")
+    try:
+        while True:
+            if not device.connected:
                 await device.connect()
 
-        if device.connected:
-            dimmer = await device.read_dimmer_value()
-            sensors = get_sensors()
+            if not device.connected:
+                coms: List[ListPortInfo] = comports()
+                coms_match = [_ for _ in coms if DEVICE_NAME in _.description]
+                if coms_match:
+                    com = coms_match[0]
+                    device.port = com.device
+                    logging.info(f"Serial Device found at {device.port}")
+                    await device.connect()
 
-            cpu_temperatures = {k: int(v) for k, v in sensors.items() if 'CPU' in k}
-            gpu_temperatures = {k: int(v) for k, v in sensors.items() if 'GPU' in k}
+            if device.connected:
+                dimmer = await device.read_dimmer_value()
+                sensors = get_sensors()
 
-            cpu_temp = max(cpu_temperatures.values() or [0])
-            gpu_temp = max(gpu_temperatures.values() or [0])
+                cpu_temperatures = {k: int(v) for k, v in sensors.items() if 'CPU' in k}
+                gpu_temperatures = {k: int(v) for k, v in sensors.items() if 'GPU' in k}
 
-            cpu_dimmer = calculate_dimmer_value(cpu_temp)
-            gpu_dimmer = calculate_dimmer_value(gpu_temp)
+                cpu_temp = max(cpu_temperatures.values() or [0])
+                gpu_temp = max(gpu_temperatures.values() or [0])
 
-            new_value = max(cpu_dimmer, gpu_dimmer)
+                cpu_dimmer = calculate_dimmer_value(cpu_temp)
+                gpu_dimmer = calculate_dimmer_value(gpu_temp)
 
-            if dimmer != new_value:
-                logging.info(f"CPU: {cpu_temp}, GPU: {gpu_temp}. {PWM_COMMAND}: {dimmer} -> {new_value}")
-                await device.set_dimmer_value(new_value)
-        else:
-            logging.info(f"No Serial Device found. Sleeping {DELAY}")
+                new_value = max(cpu_dimmer, gpu_dimmer)
 
-        await asyncio.sleep(DELAY)
+                if dimmer != new_value:
+                    logging.info(f"CPU: {cpu_temp}, GPU: {gpu_temp}. {PWM_COMMAND}: {dimmer} -> {new_value}")
+                    await device.set_dimmer_value(new_value)
+            else:
+                logging.info(f"No Serial Device found. Sleeping {DELAY}")
+
+            await asyncio.sleep(DELAY)
+    except asyncio.CancelledError:
+        logging.info("Setting 0")
+        await device.set_dimmer_value(0)
+        await asyncio.sleep(0.5)
 
 
 if __name__ == "__main__":
