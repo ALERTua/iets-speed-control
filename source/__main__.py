@@ -42,7 +42,7 @@ async def main():
 
                 new_value = max(cpu_dimmer, gpu_dimmer)
 
-                if dimmer is not None and abs(dimmer - new_value) < 3:
+                if dimmer is not None and abs(dimmer - new_value) < IGNORE_LESS_THAN:
                     # logging.info(f"Skipping too low: {dimmer} -> {new_value}")
                     pass
                 elif dimmer != new_value:

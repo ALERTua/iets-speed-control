@@ -23,6 +23,7 @@ PWM_COMMAND = os.getenv('PWM_COMMAND', 'Dimmer')
 SERIAL_BAUDRATE = int(os.getenv('SERIAL_BAUDRATE', '115200'))
 SERIAL_TIMEOUT = float(os.getenv('SERIAL_TIMEOUT', '0.3'))
 DELAY = float(os.getenv('DELAY', '1.1'))
+IGNORE_LESS_THAN = int(os.getenv('IGNORE_LESS_THAN', '3'))
 TEMP_RANGES = os.getenv('TEMP_RANGES',
                         '(0, min_temp, dimmer_zero, dimmer_zero),'
                         ' (min_temp, 70, dimmer_minimum, 50),'
