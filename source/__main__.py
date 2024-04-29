@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import asyncio
-import time
 from typing import List
 
 from serial.tools.list_ports_common import ListPortInfo
@@ -43,13 +42,18 @@ async def main():
 
                 new_value = max(cpu_dimmer, gpu_dimmer)
 
-                if dimmer != new_value:
+                if dimmer is not None and abs(dimmer - new_value) < 3:
+                    # logging.info(f"Skipping too low: {dimmer} -> {new_value}")
+                    pass
+                elif dimmer != new_value:
                     logging.info(f"CPU: {cpu_temp}, GPU: {gpu_temp}. {PWM_COMMAND}: {dimmer} -> {new_value}")
                     await device.set_dimmer_value(new_value)
-            else:
-                logging.info(f"No Serial Device found. Sleeping {DELAY}")
 
-            await asyncio.sleep(DELAY)
+                await asyncio.sleep(DELAY)
+            else:
+                logging.info(f"No Serial Device found. Sleeping 10")
+                await asyncio.sleep(10)
+
     except asyncio.CancelledError:
         logging.info("Setting 0")
         await device.set_dimmer_value(0)
