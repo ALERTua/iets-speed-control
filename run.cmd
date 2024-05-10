@@ -27,9 +27,6 @@ echo Setting local virtualenv path
 echo Running Poetry Install
 %_poetry% install
 
-echo Running Poetry Shell
-%_poetry% shell
-
 echo Using Python from
 %_poetry% run python -c "import sys;print(sys.executable)"
 
