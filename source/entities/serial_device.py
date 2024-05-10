@@ -4,6 +4,7 @@ import re
 from typing import Optional
 
 import aioserial
+from serial.serialutil import SerialException
 
 from source.util.env import *
 
@@ -39,7 +40,15 @@ class SerialDevice:
 
     @property
     def connected(self):
-        return self.serial and self.serial.is_open
+        output = self.serial and self.serial.is_open and not self.serial.closed
+        if output:
+            try:
+                _ = self.serial.in_waiting
+            except SerialException as e:
+                if 'Access is denied' in str(e):
+                    return False
+
+        return output
 
     async def connect(self):
         if not self.connected:
