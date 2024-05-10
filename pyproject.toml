@@ -1,7 +1,12 @@
 [tool.poetry]
-package-mode = false
 name = 'iets-speed-control'
-readme = 'README.md'
+description = "Fan Speed Control for 12V IETS Laptop Cooler Stands"
+authors = ["Alexey ALERT Rubasheff <alexey.rubasheff@gmail.com>"]
+readme = "README.md"
+version = "0.0.1"
+packages = [
+    { include = "source" },
+]
 
 [tool.poetry.dependencies]
 python = "^3.12.2,<3.13"
@@ -10,10 +15,14 @@ WMI = "^1.5.1"
 pyserial = "^3.5"
 wxasync = "^0.49"
 aioserial = "^1.3.1"
+poetry = "^1.8.3"
 
 [tool.poetry.group.dev.dependencies]
 pyinstaller = ">=6.6.0"
 poetry = ">=1.8.3"
+
+[tool.poetry.scripts]
+iets-speed-control = "source:main"
 
 [build-system]
 requires = ["poetry-core>=0.9.0"]

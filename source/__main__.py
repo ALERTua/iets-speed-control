@@ -11,7 +11,7 @@ from source.util.tools import calculate_dimmer_value
 from source.entities.dimmer import Dimmer
 
 
-async def main():
+async def _main():
     device = Dimmer()
     try:
         while True:
@@ -60,5 +60,9 @@ async def main():
         await asyncio.sleep(0.5)
 
 
+def main():
+    return asyncio.run(_main())
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
