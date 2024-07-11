@@ -13,6 +13,7 @@ from source.entities.dimmer import Dimmer
 
 async def _main():
     device = Dimmer()
+    initial = True
     try:
         while True:
             if not device.connected:
@@ -36,6 +37,9 @@ async def _main():
 
                 cpu_temp = max(cpu_temperatures.values() or [0])
                 gpu_temp = max(gpu_temperatures.values() or [0])
+                if initial:
+                    logging.info(f"Starting with CPU: {cpu_temp}, GPU: {gpu_temp}. {PWM_COMMAND}: {dimmer}")
+                    initial = False
 
                 cpu_dimmer = calculate_dimmer_value(cpu_temp)
                 gpu_dimmer = calculate_dimmer_value(gpu_temp)
