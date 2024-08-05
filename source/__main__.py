@@ -21,7 +21,12 @@ async def _main():
 
             if not device.connected:
                 coms: List[ListPortInfo] = comports()
-                coms_match = [_ for _ in coms if DEVICE_NAME in _.description]
+                coms_match = []
+                if DEVICE_NAME:
+                    coms_match = [_ for _ in coms if DEVICE_NAME in _.description]
+                if DEVICE_SERIAL:
+                    coms_match = [_ for _ in coms if DEVICE_SERIAL in _.serial_number] or coms_match
+
                 if coms_match:
                     com = coms_match[0]
                     device.port = com.device

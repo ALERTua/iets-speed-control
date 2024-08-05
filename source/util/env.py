@@ -18,6 +18,7 @@ logger_setup()
 logging.debug(f"env verbose: {VERBOSE}")
 
 DEVICE_NAME = os.getenv('DEVICE_NAME', 'USB-Enhanced-SERIAL CH9102')
+DEVICE_SERIAL = os.getenv('DEVICE_SERIAL', '568B022419')
 DEFAULT_PORT = os.getenv('DEFAULT_PORT', 'COM7')
 PWM_COMMAND = os.getenv('PWM_COMMAND', 'Dimmer')
 SERIAL_BAUDRATE = int(os.getenv('SERIAL_BAUDRATE', '115200'))
