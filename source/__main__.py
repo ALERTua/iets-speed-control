@@ -37,8 +37,8 @@ async def _main():
                 dimmer = await device.read_dimmer_value()
                 sensors = get_sensors()
 
-                cpu_temperatures = {k: int(v) for k, v in sensors.items() if 'CPU' in k}
-                gpu_temperatures = {k: int(v) for k, v in sensors.items() if 'GPU' in k}
+                cpu_temperatures = {k: int(v) for k, v in sensors.items() if CPU_SENSOR_FILTER in k}
+                gpu_temperatures = {k: int(v) for k, v in sensors.items() if GPU_SENSOR_FILTER in k}
 
                 cpu_temp = max(cpu_temperatures.values() or [0])
                 gpu_temp = max(gpu_temperatures.values() or [0])
