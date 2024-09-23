@@ -26,7 +26,7 @@ SERIAL_TIMEOUT = float(os.getenv('SERIAL_TIMEOUT', '0.3'))
 DELAY = float(os.getenv('DELAY', '1.1'))
 IGNORE_LESS_THAN = int(os.getenv('IGNORE_LESS_THAN', '3'))
 CPU_SENSOR_FILTER = os.getenv('CPU_SENSOR_FILTER', 'CPU')
-GPU_SENSOR_FILTER = os.getenv('CPU_SENSOR_FILTER', 'GPU')
+GPU_SENSOR_FILTER = os.getenv('GPU_SENSOR_FILTER', 'GPU')
 TEMP_RANGES = os.getenv('TEMP_RANGES',
                         '(0, min_temp, dimmer_zero, dimmer_zero),'
                         ' (min_temp, 70, dimmer_minimum, 50),'
