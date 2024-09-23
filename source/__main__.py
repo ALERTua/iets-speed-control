@@ -50,6 +50,11 @@ async def _main():
                 gpu_dimmer = calculate_dimmer_value(gpu_temp)
 
                 new_value = max(cpu_dimmer, gpu_dimmer)
+                if dimmer is not None and MAX_STEP:
+                    # if new_value > dimmer + MAX_STEP:
+                    #     new_value = dimmer + MAX_STEP
+                    if new_value < dimmer - MAX_STEP:
+                        new_value = dimmer - MAX_STEP
 
                 if dimmer is not None and abs(dimmer - new_value) < IGNORE_LESS_THAN:
                     # logging.info(f"Skipping too low: {dimmer} -> {new_value}")

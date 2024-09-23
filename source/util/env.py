@@ -27,6 +27,7 @@ DELAY = float(os.getenv('DELAY', '1.1'))
 IGNORE_LESS_THAN = int(os.getenv('IGNORE_LESS_THAN', '3'))
 CPU_SENSOR_FILTER = os.getenv('CPU_SENSOR_FILTER', 'CPU')
 GPU_SENSOR_FILTER = os.getenv('GPU_SENSOR_FILTER', 'GPU')
+MAX_STEP = int(os.getenv('MAX_STEP', 100))
 TEMP_RANGES = os.getenv('TEMP_RANGES',
                         '(0, min_temp, dimmer_zero, dimmer_zero),'
                         ' (min_temp, 70, dimmer_minimum, 50),'
