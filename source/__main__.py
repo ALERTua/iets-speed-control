@@ -51,9 +51,9 @@ async def _main():
 
                 new_value = max(cpu_dimmer, gpu_dimmer)
                 if dimmer is not None and MAX_STEP:
-                    # if new_value > dimmer + MAX_STEP:
+                    # if new_value > dimmer + MAX_STEP:  # limit up step
                     #     new_value = dimmer + MAX_STEP
-                    if new_value < dimmer - MAX_STEP:
+                    if new_value < dimmer - MAX_STEP:  # limit down step
                         new_value = dimmer - MAX_STEP
 
                 if dimmer is not None and abs(dimmer - new_value) < IGNORE_LESS_THAN:
