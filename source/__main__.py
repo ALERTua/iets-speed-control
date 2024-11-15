@@ -11,6 +11,10 @@ from source.util.tools import calculate_dimmer_value
 from source.entities.dimmer import Dimmer
 
 
+class DimmerException(Exception):
+    pass
+
+
 async def _main():
     device = Dimmer()
     initial = True
@@ -25,7 +29,7 @@ async def _main():
                 if DEVICE_NAME:
                     coms_match = [_ for _ in coms if DEVICE_NAME in _.description]
                 if DEVICE_SERIAL:
-                    coms_match = [_ for _ in coms if DEVICE_SERIAL in _.serial_number] or coms_match
+                    coms_match = [_ for _ in coms if _.serial_number and DEVICE_SERIAL in _.serial_number] or coms_match
 
                 if coms_match:
                     com = coms_match[0]
@@ -65,13 +69,17 @@ async def _main():
 
                 await asyncio.sleep(DELAY)
             else:
-                logging.info(f"No Serial Device found. Sleeping 10")
-                await asyncio.sleep(10)
+                logging.info(f"No device connected")
+                raise DimmerException
 
     except asyncio.CancelledError:
         logging.info("Setting 0")
         await device.set_dimmer_value(0)
         await asyncio.sleep(0.5)
+    except DimmerException:
+        logging.info("Sleeping 10")
+        await asyncio.sleep(10)
+        return await _main()
 
 
 def main():
