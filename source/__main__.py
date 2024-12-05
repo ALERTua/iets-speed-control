@@ -37,15 +37,16 @@ async def _main():
                     logging.info(f"Serial Device found at {device.port}")
                     await device.connect()
 
+            sensors = get_sensors()
+            cpu_temperatures = {k: int(v) for k, v in sensors.items() if CPU_SENSOR_FILTER in k}
+            gpu_temperatures = {k: int(v) for k, v in sensors.items() if GPU_SENSOR_FILTER in k}
+
+            cpu_temp = max(cpu_temperatures.values() or [0])
+            gpu_temp = max(gpu_temperatures.values() or [0])
+
             if device.connected:
                 dimmer = await device.read_dimmer_value()
-                sensors = get_sensors()
 
-                cpu_temperatures = {k: int(v) for k, v in sensors.items() if CPU_SENSOR_FILTER in k}
-                gpu_temperatures = {k: int(v) for k, v in sensors.items() if GPU_SENSOR_FILTER in k}
-
-                cpu_temp = max(cpu_temperatures.values() or [0])
-                gpu_temp = max(gpu_temperatures.values() or [0])
                 if initial:
                     logging.info(f"Starting with CPU: {cpu_temp}, GPU: {gpu_temp}. {PWM_COMMAND}: {dimmer}")
                     initial = False
@@ -69,7 +70,7 @@ async def _main():
 
                 await asyncio.sleep(DELAY)
             else:
-                logging.info(f"No device connected")
+                logging.info(f"No device connected. CPU: {cpu_temp}, GPU: {gpu_temp}")
                 raise DimmerException
 
     except asyncio.CancelledError:
