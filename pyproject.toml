@@ -23,7 +23,7 @@ dev-dependencies = [
 
 
 [project.scripts]
-iets-speed-control-cli = "source.entrypoints.cli:cli"
+iets-speed-control = "source.entrypoints.cli:cli"
 iets-speed-control-gui = "source.entrypoints.gui:gui"
 
 
