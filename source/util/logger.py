@@ -9,9 +9,9 @@ def logger_setup():
     if __LOGGER_SET_UP:
         return
 
-    verbose = os.getenv('VERBOSE')
+    verbose = os.getenv("VERBOSE")
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(level=level, format='%(asctime)s - %(levelname)s - %(message)s')
+    logging.basicConfig(level=level, format="%(asctime)s - %(levelname)s - %(message)s")
     logger = logging.getLogger()
     console = logging.StreamHandler()
     logger.handlers = [console]

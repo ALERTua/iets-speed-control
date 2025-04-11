@@ -12,7 +12,7 @@ Control the PWM of your laptop cooling pad fan using ESP32 via USB, based on you
 - Sends PWM command (`Dimmer {value}` by default) to the serial device
 
 ### AIDA64 Preparation
-Getting CPU Temperature appeared to be harder on my Windows 11 i9-13900HX than flashing and connecting ESP32! The only working way I found was AIDA64 via WMI. If you can get your CPU Temperature easier - good for you! 
+Getting CPU Temperature appeared to be harder on my Windows 11 i9-13900HX than flashing and connecting ESP32! The only working way I found was AIDA64 via WMI. If you can get your CPU Temperature easier - good for you!
 - Run AIDA64
 - In AIDA64 Preferences->External Applications->Enable writing sensors to WMI
 - In AIDA64 Preferences->External Applications0>Enable Temperature sensors
@@ -20,7 +20,7 @@ Getting CPU Temperature appeared to be harder on my Windows 11 i9-13900HX than f
 
 <img alt="AIDA64_External_Applications" src="docs/images/AIDA64_External_Applications.png"/>
 
-### Serial Device Preparation 
+### Serial Device Preparation
 Example: [ESP32_Tasmota](docs/ESP32_Tasmota.md)
 - Connect your Serial Device via USB
 - Attach a device pin to the fan PWM

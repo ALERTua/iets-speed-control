@@ -1,12 +1,13 @@
 import asyncio
 import json
 import re
+import logging
 from typing import Optional
 
 import aioserial
 from serial.serialutil import SerialException
 
-from source.util.env import *
+from source.util import env
 
 logging.basicConfig(level=logging.INFO)
 
@@ -16,7 +17,7 @@ def require_connection(func):
         if not self.connected:
             await self.connect()
         if not self.connected:
-            logging.error(f"Connection not established.")
+            logging.error("Connection not established.")
             return None
 
         return await func(self, *args, **kwargs)
@@ -25,7 +26,12 @@ def require_connection(func):
 
 
 class SerialDevice:
-    def __init__(self, port=DEFAULT_PORT, baudrate=SERIAL_BAUDRATE, timeout=SERIAL_TIMEOUT):
+    def __init__(
+        self,
+        port=env.DEFAULT_PORT,
+        baudrate=env.SERIAL_BAUDRATE,
+        timeout=env.SERIAL_TIMEOUT,
+    ):
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
@@ -45,7 +51,7 @@ class SerialDevice:
             try:
                 _ = self.serial.in_waiting
             except SerialException as e:
-                if 'Access is denied' in str(e):
+                if "Access is denied" in str(e):
                     return False
 
         return output
@@ -53,8 +59,12 @@ class SerialDevice:
     async def connect(self):
         if not self.connected:
             try:
-                self.serial = aioserial.AioSerial(port=self.port, baudrate=self.baudrate, write_timeout=self.timeout,
-                                                  timeout=self.timeout)
+                self.serial = aioserial.AioSerial(
+                    port=self.port,
+                    baudrate=self.baudrate,
+                    write_timeout=self.timeout,
+                    timeout=self.timeout,
+                )
                 logging.info(f"Connected to {self.port}")
             except Exception as e:
                 logging.error(f"Error: Unable to connect to {self.port}. {e}")
@@ -69,7 +79,7 @@ class SerialDevice:
     @require_connection
     async def send_command(self, command):
         try:
-            await self.serial.write_async((command + '\n').encode())
+            await self.serial.write_async((command + "\n").encode())
             await asyncio.sleep(0.1)  # Wait for the command to be processed
         except Exception as e:
             logging.error(f"Error sending command: {e}")
@@ -81,7 +91,7 @@ class SerialDevice:
         # .strip()
         except Exception as e:
             logging.error(f"Error reading line: {e}")
-            return ''
+            return ""
 
     async def _read_results(self):
         lines = []
@@ -91,8 +101,8 @@ class SerialDevice:
                 break
 
             lines.append(line)
-        results = [_.strip() for _ in lines if 'RESULT' in _]
-        results = [re.sub('.*RESULT = ', '', _) for _ in results]
+        results = [_.strip() for _ in lines if "RESULT" in _]
+        results = [re.sub(".*RESULT = ", "", _) for _ in results]
         output = []
         for result in results:
             try:
@@ -122,5 +132,5 @@ async def main():
     pass
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(main())

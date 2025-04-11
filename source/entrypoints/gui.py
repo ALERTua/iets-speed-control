@@ -1,21 +1,22 @@
+import logging
+import wx
 from enum import Enum
 from typing import List, Optional
 from pathlib import Path
-import wx
 from wxasync import AsyncBind, WxAsyncApp, StartCoroutine
 from wx.adv import TaskBarIcon as TaskBarIcon
 from wx.lib.agw.pygauge import PyGauge
 import asyncio
 
 from source.entities.dimmer import Dimmer
-from source.util.env import *  # import dotenv first
+from source.util import env
 from source.util.tools import calculate_dimmer_value
 
 from source.util.sensors import get_sensors
 from serial.tools.list_ports_common import ListPortInfo
 from serial.tools.list_ports_windows import comports
 
-APP_NAME = 'iets-speed-control'
+APP_NAME = "iets-speed-control"
 
 
 class Step(Enum):
@@ -30,7 +31,9 @@ class SpeedControlTaskBarIcon(TaskBarIcon):
 
         self.frame = frame
 
-        self.SetIcon(wx.Icon('../media/icon.png', wx.BITMAP_TYPE_PNG), 'Task bar icon')
+        icon_path = Path(__file__).parent.parent.parent / "media" / "icon.png"
+        icon = wx.Icon(str(icon_path), wx.BITMAP_TYPE_PNG)
+        self.SetIcon(icon, "Task bar icon")
 
         # ------------
 
@@ -42,9 +45,9 @@ class SpeedControlTaskBarIcon(TaskBarIcon):
 
     def CreatePopupMenu(self):
         menu = wx.Menu()
-        menu.Append(1, 'Show')
-        menu.Append(2, 'Hide')
-        menu.Append(3, 'Close')
+        menu.Append(1, "Show")
+        menu.Append(2, "Hide")
+        menu.Append(3, "Close")
         return menu
 
     async def OnTaskBarClose(self, event):
@@ -61,10 +64,12 @@ class SpeedControlTaskBarIcon(TaskBarIcon):
 
 class SpeedControlFrame(wx.Frame):
     def __init__(self, parent=None):
-        super(SpeedControlFrame, self).__init__(parent)
-        self.SetWindowStyle(style=self.GetWindowStyle() ^ wx.RESIZE_BORDER ^ wx.MAXIMIZE_BOX)
+        super(SpeedControlFrame, self).__init__(
+            parent, style=wx.DEFAULT_FRAME_STYLE ^ wx.MAXIMIZE_BOX
+        )
+        self.SetWindowStyle(style=self.GetWindowStyle() ^ wx.RESIZE_BORDER)
 
-        icon_path = Path(__file__).parent.parent / 'media/icon.png'
+        icon_path = Path(__file__).parent.parent.parent / "media/icon.png"
         if icon_path.exists():
             icon = wx.Icon(str(icon_path), wx.BITMAP_TYPE_ANY, -1, -1)
             self.SetIcon(icon)
@@ -88,16 +93,16 @@ class SpeedControlFrame(wx.Frame):
         self._gpu_temp = 0
 
         StartCoroutine(self.draw(), self)
-        self.SetMaxSize(self.Size)
-        # self.Centre()
+        self.SetMinSize((200, -1))
+
         self.LoadWindowPosition()
         self.start()
 
     def LoadWindowPosition(self):
         # noinspection PyUnresolvedReferences
         config = wx.Config(APP_NAME)
-        x = config.ReadInt('WindowPosX', -1)
-        y = config.ReadInt('WindowPosY', -1)
+        x = config.ReadInt("WindowPosX", -1)
+        y = config.ReadInt("WindowPosY", -1)
 
         # Get the desktop size
         desktop = wx.Display().GetClientArea()
@@ -111,8 +116,8 @@ class SpeedControlFrame(wx.Frame):
         pos = self.GetPosition()
         # noinspection PyUnresolvedReferences
         config = wx.Config(APP_NAME)
-        config.WriteInt('WindowPosX', pos.x)
-        config.WriteInt('WindowPosY', pos.y)
+        config.WriteInt("WindowPosX", pos.x)
+        config.WriteInt("WindowPosY", pos.y)
         config.Flush()
 
     async def draw(self, *args, **kwargs):
@@ -133,6 +138,8 @@ class SpeedControlFrame(wx.Frame):
         StartCoroutine(self.loop_connect, self)
 
     def sizer(self):
+        main_sizer = wx.BoxSizer(wx.VERTICAL)
+        center_sizer = wx.BoxSizer(wx.VERTICAL)
         sizer = wx.GridBagSizer(5, 5)
         sizer.SetEmptyCellSize((10, 10))
 
@@ -141,7 +148,9 @@ class SpeedControlFrame(wx.Frame):
 
         column += 1
 
-        self.cpu_label = wx.StaticText(self, label='CPU', style=wx.ALIGN_CENTRE_HORIZONTAL)
+        self.cpu_label = wx.StaticText(
+            self, label="CPU", style=wx.ALIGN_CENTRE_HORIZONTAL
+        )
         sizer.Add(self.cpu_label, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
 
         column += 1
@@ -151,7 +160,9 @@ class SpeedControlFrame(wx.Frame):
 
         column += 3
 
-        self.gpu_label = wx.StaticText(self, label='GPU', style=wx.ALIGN_CENTRE_HORIZONTAL)
+        self.gpu_label = wx.StaticText(
+            self, label="GPU", style=wx.ALIGN_CENTRE_HORIZONTAL
+        )
         sizer.Add(self.gpu_label, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
 
         column += 1
@@ -162,12 +173,21 @@ class SpeedControlFrame(wx.Frame):
         row += 1
         column = 0
 
-        self.progressbar = PyGauge(self, range=100, size=(150, 18), style=wx.GA_HORIZONTAL)
-        self.progressbar.SetDrawValue(draw=True, drawPercent=True, font=None, colour=wx.BLACK, formatString=None)
+        self.progressbar = PyGauge(
+            self, range=100, size=(150, 18), style=wx.GA_HORIZONTAL
+        )
+        self.progressbar.SetDrawValue(
+            draw=True, drawPercent=True, font=None, colour=wx.BLACK, formatString=None
+        )
         # self.progressbar.SetBackgroundColour(wx.BLACK)
         # self.progressbar.SetBorderColor(wx.BLACK)
         self.progressbar.SetBarColour(wx.GREEN)
-        sizer.Add(self.progressbar, pos=(row, column), span=(1, sizer.GetCols()), flag=wx.ALIGN_CENTRE)
+        sizer.Add(
+            self.progressbar,
+            pos=(row, column),
+            span=(1, sizer.GetCols()),
+            flag=wx.ALIGN_CENTRE,
+        )
 
         row += 1
         column = 0
@@ -175,10 +195,17 @@ class SpeedControlFrame(wx.Frame):
         sizer.Add(self.step_label, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
 
         self.port_label = wx.StaticText(self, style=wx.ALIGN_CENTRE_HORIZONTAL)
-        sizer.Add(self.port_label, pos=(row, sizer.GetCols() - 2), span=(1, 1), flag=wx.ALIGN_CENTRE)
+        sizer.Add(
+            self.port_label,
+            pos=(row, sizer.GetCols() - 2),
+            span=(1, 1),
+            flag=wx.ALIGN_CENTRE,
+        )
 
         sizer.Fit(self)
-        self.SetSizer(sizer)
+        center_sizer.Add(sizer, 1, wx.ALIGN_CENTER | wx.ALL, 0)
+        main_sizer.Add(center_sizer, 1, wx.EXPAND | wx.ALL, 0)
+        self.SetSizer(main_sizer)
 
     @property
     def step(self):
@@ -204,7 +231,7 @@ class SpeedControlFrame(wx.Frame):
                 self.progressbar.Hide()
 
     @property
-    def progress(self) -> int:
+    def progress(self) -> int | None:
         if self.progressbar:
             return self.progressbar.GetValue()
 
@@ -232,8 +259,10 @@ class SpeedControlFrame(wx.Frame):
 
         old_dimmer = self.dimmer
         if old_dimmer != value:
-            logging.info(f"CPU: {self.cpu_temp}, GPU: {self.gpu_temp}."
-                         f" {PWM_COMMAND}: {old_dimmer} -> {value}")
+            logging.info(
+                f"CPU: {self.cpu_temp}, GPU: {self.gpu_temp}."
+                f" {env.PWM_COMMAND}: {old_dimmer} -> {value}"
+            )
 
             StartCoroutine(self.serial_device.set_dimmer_value(value), self)
             # self.serial_device.set_dimmer_value(value)
@@ -285,40 +314,65 @@ class SpeedControlFrame(wx.Frame):
                     await self.connect()
                 elif self.step == Step.CONNECTED:
                     sensors = get_sensors()
-                    cpu_temperatures = {k: int(v) for k, v in sensors.items() if 'CPU' in k}
-                    gpu_temperatures = {k: int(v) for k, v in sensors.items() if 'GPU' in k}
+                    cpu_temperatures = {
+                        k: int(v)
+                        for k, v in sensors.items()
+                        if env.CPU_SENSOR_FILTER in k
+                    }
+                    gpu_temperatures = {
+                        k: int(v)
+                        for k, v in sensors.items()
+                        if env.GPU_SENSOR_FILTER == k
+                    }
 
-                    self.cpu_temp = max(cpu_temperatures.values() or [0])
-                    self.gpu_temp = max(gpu_temperatures.values() or [0])
+                    self.cpu_temp = cpu_temp = max(cpu_temperatures.values() or [0])
+                    self.gpu_temp = gpu_temp = max(gpu_temperatures.values() or [0])
 
-                    dimmer_value = await self.serial_device.read_dimmer_value()
-                    self.progress = self.dimmer = dimmer_value
+                    dimmer = await self.serial_device.read_dimmer_value()
+                    self.progress = self.dimmer = dimmer
 
-                    cpu_dimmer = calculate_dimmer_value(self.cpu_temp)
-                    gpu_dimmer = calculate_dimmer_value(self.gpu_temp)
+                    cpu_dimmer = calculate_dimmer_value(self.cpu_temp, env.TEMP_RANGES)
+                    gpu_dimmer = calculate_dimmer_value(self.gpu_temp, env.TEMP_RANGES)
                     new_value = max(cpu_dimmer, gpu_dimmer)
 
-                    if self.dimmer != new_value:
+                    if dimmer is not None and env.MAX_STEP:
+                        # if new_value > dimmer + MAX_STEP:  # limit up step
+                        #     new_value = dimmer + MAX_STEP
+                        if new_value < dimmer - env.MAX_STEP:  # limit down step
+                            new_value = dimmer - env.MAX_STEP
+
+                    if (
+                        dimmer is not None
+                        and abs(dimmer - new_value) < env.IGNORE_LESS_THAN
+                    ):
+                        # logging.info(f"Skipping too low: {dimmer} -> {new_value}")
+                        pass
+                    elif dimmer != new_value:
+                        logging.info(
+                            f"CPU: {cpu_temp}, GPU: {gpu_temp}. {env.PWM_COMMAND}: {dimmer} -> {new_value}"
+                        )
                         self.dimmer = new_value
                 elif self.step == Step.INIT:
                     await self.connect()
                 elif self.step == Step.CONNECTING:
-                    logging.debug(f"connecting 2")
+                    logging.debug("connecting 2")
                     self.step = Step.CONNECTING
                     coms: List[ListPortInfo] = comports()
-                    coms_match = [_ for _ in coms if DEVICE_NAME in _.description]
+                    coms_match = [_ for _ in coms if env.DEVICE_NAME in _.description]
                     if coms_match:
                         com = coms_match[0]
                         self.serial_device.port = com.device
-                        logging.info(f"Serial Device found at {self.serial_device.port}")
+                        logging.info(
+                            f"Serial Device found at {self.serial_device.port}"
+                        )
                         await self.connect()
 
-                await asyncio.sleep(DELAY)
+                await asyncio.sleep(env.DELAY)
         except asyncio.CancelledError:
             self.dimmer = 0
 
 
-async def main():
+async def _gui():
     app = WxAsyncApp()
     frame = SpeedControlFrame()
     frame.Show()
@@ -326,5 +380,9 @@ async def main():
     await app.MainLoop()
 
 
-if __name__ == '__main__':
-    asyncio.run(main())
+def gui():
+    asyncio.run(_gui())
+
+
+if __name__ == "__main__":
+    gui()

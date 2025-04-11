@@ -1,14 +1,20 @@
 import asyncio
 from typing import Optional
-
-from source.util.env import *
+import logging
+from source.util import env
 from source.entities.serial_device import SerialDevice
 
 logging.basicConfig(level=logging.INFO)
 
 
 class Dimmer(SerialDevice):
-    def __init__(self, port=DEFAULT_PORT, baudrate=SERIAL_BAUDRATE, timeout=0.3, dimmer_command=PWM_COMMAND):
+    def __init__(
+        self,
+        port=env.DEFAULT_PORT,
+        baudrate=env.SERIAL_BAUDRATE,
+        timeout=0.3,
+        dimmer_command=env.PWM_COMMAND,
+    ):
         super().__init__(port=port, baudrate=baudrate, timeout=timeout)
         self.dimmer_command = dimmer_command
 
@@ -19,10 +25,10 @@ class Dimmer(SerialDevice):
         return await self.set_field_value(self.dimmer_command, value)
 
 
-async def main():
+async def _main():
     sd = Dimmer()
     await sd.connect()
-    await sd.send_command(PWM_COMMAND)
+    await sd.send_command(env.PWM_COMMAND)
     value = await sd._read_results()
 
     value_set = await sd.set_dimmer_value(60)
@@ -32,5 +38,5 @@ async def main():
     pass
 
 
-if __name__ == '__main__':
-    asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(_main())

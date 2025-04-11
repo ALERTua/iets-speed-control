@@ -1,10 +1,7 @@
-from source.util.env import *  # import dotenv first
-from source.util.logger import logger_setup  # import dotenv first
-
-logger_setup()
+# do not import env here
 
 
-def calculate_dimmer_value(temperature, temperature_ranges=TEMP_RANGES):
+def calculate_dimmer_value(temperature, temperature_ranges):
     if isinstance(temperature_ranges, str):
         temperature_ranges = eval(temperature_ranges)
     output = None
@@ -22,8 +19,10 @@ def calculate_dimmer_value(temperature, temperature_ranges=TEMP_RANGES):
         dimmers_up.add(dimmer_up)
         if temp_down <= temperature < temp_up:
             # Calculate linear dimmer value within the current range
-            output = dimmer_down + int(((temperature - temp_down) / (temp_up - temp_down))
-                                       * (dimmer_up - dimmer_down))
+            output = dimmer_down + int(
+                ((temperature - temp_down) / (temp_up - temp_down))
+                * (dimmer_up - dimmer_down)
+            )
             break
 
     if output is None:
@@ -40,7 +39,23 @@ def calculate_dimmer_value(temperature, temperature_ranges=TEMP_RANGES):
     return output
 
 
-if __name__ == '__main__':
+def strtobool(val):  # distutil strtobool
+    """Convert a string representation of truth to true (1) or false (0).
+
+    True values are 'y', 'yes', 't', 'true', 'on', and '1'; false values
+    are 'n', 'no', 'f', 'false', 'off', and '0'.  Raises ValueError if
+    'val' is anything else.
+    """
+    val = val.lower()
+    if val in ("y", "yes", "t", "true", "on", "1"):
+        return 1
+    elif val in ("n", "no", "f", "false", "off", "0"):
+        return 0
+    else:
+        raise ValueError("invalid truth value %r" % (val,))
+
+
+if __name__ == "__main__":
     temp_35 = calculate_dimmer_value(35)
     temp_40 = calculate_dimmer_value(40)
     temp_50 = calculate_dimmer_value(50)

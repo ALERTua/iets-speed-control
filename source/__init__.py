@@ -1,1 +1,1 @@
-from .__main__ import main
+from source.util import env  # noqa: F401
