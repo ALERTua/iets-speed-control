@@ -138,6 +138,7 @@ class SpeedControlFrame(wx.Frame):
         StartCoroutine(self.loop_connect, self)
 
     def sizer(self):
+        logging.debug("generating sizer")
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         center_sizer = wx.BoxSizer(wx.VERTICAL)
         sizer = wx.GridBagSizer(5, 5)
