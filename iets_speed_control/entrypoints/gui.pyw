@@ -6,6 +6,7 @@ from enum import Enum
 from typing import List, Optional
 from pathlib import Path
 from wxasync import AsyncBind, WxAsyncApp, StartCoroutine
+
 from wx.adv import TaskBarIcon as TaskBarIcon
 from wx.lib.agw.pygauge import PyGauge
 from serial.tools.list_ports_common import ListPortInfo
@@ -76,7 +77,7 @@ class SpeedControlFrame(wx.Frame):
             self.SetIcon(icon)
 
         self.tskic = SpeedControlTaskBarIcon(self)
-        AsyncBind(wx.EVT_CLOSE, self.OnClose, self)
+        AsyncBind(wx.EVT_CLOSE, self.on_close, self)
         AsyncBind(wx.EVT_ICONIZE, self.draw, self)
 
         self.step_label = None
@@ -94,12 +95,12 @@ class SpeedControlFrame(wx.Frame):
         self._gpu_temp = 0
 
         StartCoroutine(self.draw(), self)
-        self.SetMinSize((200, -1))
+        self.SetMinSize(wx.Size(200, -1))
 
-        self.LoadWindowPosition()
+        self.load_window_position()
         self.start()
 
-    def LoadWindowPosition(self):
+    def load_window_position(self):
         # noinspection PyUnresolvedReferences
         config = wx.Config(APP_NAME)
         x = config.ReadInt("WindowPosX", -1)
@@ -113,7 +114,7 @@ class SpeedControlFrame(wx.Frame):
         if x != -1 and y != -1 and 0 <= x < desktop_width and 0 <= y < desktop_height:
             self.SetPosition(wx.Point(x, y))
 
-    def SaveWindowPosition(self):
+    def save_window_position(self):
         pos = self.GetPosition()
         # noinspection PyUnresolvedReferences
         config = wx.Config(APP_NAME)
@@ -126,9 +127,9 @@ class SpeedControlFrame(wx.Frame):
         self.GetSizer().Fit(self)
         self.Layout()
 
-    async def OnClose(self, event):
+    async def on_close(self, event):
         logging.debug("OnClose")
-        self.SaveWindowPosition()
+        self.save_window_position()
         self.dimmer = 0
         self.tskic.Destroy()
         self.Destroy()
@@ -143,7 +144,7 @@ class SpeedControlFrame(wx.Frame):
         main_sizer = wx.BoxSizer(wx.VERTICAL)
         center_sizer = wx.BoxSizer(wx.VERTICAL)
         sizer = wx.GridBagSizer(5, 5)
-        sizer.SetEmptyCellSize((10, 10))
+        sizer.SetEmptyCellSize(wx.Size(10, 10))
 
         row = 0
         column = 0
@@ -237,6 +238,8 @@ class SpeedControlFrame(wx.Frame):
         if self.progressbar:
             return self.progressbar.GetValue()
 
+        return None
+
     @progress.setter
     def progress(self, value):
         if not value:
@@ -298,9 +301,9 @@ class SpeedControlFrame(wx.Frame):
         self.step = Step.CONNECTING
 
         coro = StartCoroutine(self.serial_device.connect(), self)
-        coro.add_done_callback(self.OnConnect)
+        coro.add_done_callback(self.on_connect)
 
-    def OnConnect(self, event=None):
+    def on_connect(self, event=None):
         if self.serial_device.connected:
             logging.debug("connected")
             self.step = Step.CONNECTED
