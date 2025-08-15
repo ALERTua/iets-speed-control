@@ -5,10 +5,10 @@ from typing import List
 from serial.tools.list_ports_common import ListPortInfo
 from serial.tools.list_ports_windows import comports
 
-from source.util import env
-from source.util.sensors import get_sensors
-from source.util.tools import calculate_dimmer_value
-from source.entities.dimmer import Dimmer
+from ..util import env
+from ..util.sensors import get_sensors
+from ..util.tools import calculate_dimmer_value
+from ..entities.dimmer import Dimmer
 
 
 class DimmerException(Exception):

@@ -1,6 +1,6 @@
 import os
-from source.util.logger import logger_setup
-from source.util.tools import strtobool
+from .logger import logger_setup
+from .tools import strtobool
 import logging  # has to be here
 
 from dotenv import load_dotenv

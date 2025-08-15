@@ -1,20 +1,21 @@
 import logging
 import wx
+import asyncio
+
 from enum import Enum
 from typing import List, Optional
 from pathlib import Path
 from wxasync import AsyncBind, WxAsyncApp, StartCoroutine
 from wx.adv import TaskBarIcon as TaskBarIcon
 from wx.lib.agw.pygauge import PyGauge
-import asyncio
-
-from source.entities.dimmer import Dimmer
-from source.util import env
-from source.util.tools import calculate_dimmer_value
-
-from source.util.sensors import get_sensors
 from serial.tools.list_ports_common import ListPortInfo
 from serial.tools.list_ports_windows import comports
+
+from ..entities.dimmer import Dimmer
+from ..util import env
+from ..util.tools import calculate_dimmer_value
+
+from ..util.sensors import get_sensors
 
 APP_NAME = "iets-speed-control"
 

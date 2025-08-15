@@ -7,7 +7,7 @@ from typing import Optional
 import aioserial
 from serial.serialutil import SerialException
 
-from source.util import env
+from ..util import env
 
 logging.basicConfig(level=logging.INFO)
 
@@ -107,7 +107,8 @@ class SerialDevice:
         for result in results:
             try:
                 output.append(json.loads(result))
-            except:
+            except Exception as e:
+                logging.debug(f"Error parsing result: {type(e)} {str(e)}")
                 continue
 
         return output
