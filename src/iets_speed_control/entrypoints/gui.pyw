@@ -12,8 +12,9 @@ from wx.lib.agw.pygauge import PyGauge
 from serial.tools.list_ports_common import ListPortInfo
 from serial.tools.list_ports_windows import comports
 
-from ..entities.dimmer import Dimmer
 from ..util import env
+
+from ..entities.dimmer import Dimmer
 from ..util.tools import calculate_dimmer_value
 
 from ..util.sensors import get_sensors
@@ -28,20 +29,20 @@ class Step(Enum):
 
 
 class SpeedControlTaskBarIcon(TaskBarIcon):
-    def __init__(self, frame):
+    def __init__(self, frame: wx.Frame):
         TaskBarIcon.__init__(self)
 
         self.frame = frame
 
-        icon_path = Path(__file__).parent.parent.parent / "media" / "icon.png"
+        icon_path = Path(__file__).parent.parent.parent.parent / "media" / "icon.png"
         icon = wx.Icon(str(icon_path), wx.BITMAP_TYPE_PNG)
         self.SetIcon(icon, "Task bar icon")
 
         # ------------
 
-        AsyncBind(wx.EVT_MENU, self.on_task_bar_activate, self.frame, id=1)
-        AsyncBind(wx.EVT_MENU, self.on_task_bar_deactivate, self.frame, id=2)
-        AsyncBind(wx.EVT_MENU, self.on_task_bar_close, self.frame, id=3)
+        AsyncBind(wx.EVT_MENU, self.on_task_bar_activate, self.frame.TopLevelParent, id=1)
+        AsyncBind(wx.EVT_MENU, self.on_task_bar_deactivate, self.frame.TopLevelParent, id=2)
+        AsyncBind(wx.EVT_MENU, self.on_task_bar_close, self.frame.TopLevelParent, id=3)
 
     # -----------------------------------------------------------------------
 
@@ -93,6 +94,7 @@ class SpeedControlFrame(wx.Frame):
         self._dimmer = 0
         self._cpu_temp = 0
         self._gpu_temp = 0
+        # self._loop_task = None
 
         StartCoroutine(self.draw(), self)
         self.SetMinSize(wx.Size(200, -1))
@@ -128,16 +130,26 @@ class SpeedControlFrame(wx.Frame):
         self.Layout()
 
     async def on_close(self, event):
-        logging.debug("OnClose")
+        logging.debug("on_close")
         self.save_window_position()
+        # Stop background loop
+        if hasattr(self, "_loop_task") and self._loop_task is not None and not self._loop_task.done():
+            self._loop_task.cancel()
+            try:
+                await self._loop_task
+            except asyncio.CancelledError:
+                pass
+        # Set fan to 0 on exit
         self.dimmer = 0
+        # Destroy tray icon and window
         self.tskic.Destroy()
         self.Destroy()
         event.Skip()  # Allow the window to close normally
 
     def start(self):
         logging.debug("start")
-        StartCoroutine(self.loop_connect, self)
+        if self.__dict__.get('_loop_task', None) is None:
+            self._loop_task = StartCoroutine(self.loop_connect(), self)
 
     def sizer(self):
         logging.debug("generating sizer")
@@ -163,9 +175,7 @@ class SpeedControlFrame(wx.Frame):
 
         column += 3
 
-        self.gpu_label = wx.StaticText(
-            self, label="GPU", style=wx.ALIGN_CENTRE_HORIZONTAL
-        )
+        self.gpu_label = wx.StaticText(self, label="GPU", style=wx.ALIGN_CENTRE_HORIZONTAL)
         sizer.Add(self.gpu_label, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
 
         column += 1
@@ -173,22 +183,20 @@ class SpeedControlFrame(wx.Frame):
         self.gpu_value = wx.StaticText(self, style=wx.ALIGN_CENTRE_HORIZONTAL)
         sizer.Add(self.gpu_value, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
 
+        total_cols = column + 1
+
         row += 1
         column = 0
 
-        self.progressbar = PyGauge(
-            self, range=100, size=(150, 18), style=wx.GA_HORIZONTAL
-        )
-        self.progressbar.SetDrawValue(
-            draw=True, drawPercent=True, font=None, colour=wx.BLACK, formatString=None
-        )
+        self.progressbar = PyGauge(self, range=100, size=(150, 18), style=wx.GA_HORIZONTAL)
+        self.progressbar.SetDrawValue(draw=True, drawPercent=True, font=None, colour=wx.BLACK, formatString=None)
         # self.progressbar.SetBackgroundColour(wx.BLACK)
         # self.progressbar.SetBorderColor(wx.BLACK)
         self.progressbar.SetBarColour(wx.GREEN)
         sizer.Add(
             self.progressbar,
             pos=(row, column),
-            span=(1, sizer.GetCols()),
+            span=(1, total_cols),
             flag=wx.ALIGN_CENTRE,
         )
 
@@ -225,33 +233,36 @@ class SpeedControlFrame(wx.Frame):
         if self.step_label:
             self.step_label.SetLabel(value.name)
         if value == Step.CONNECTED:
-            if self.progressbar and not self.progressbar.Shown:
+            if self.progressbar and not self.progressbar.IsShown():
                 self.progressbar.Show()
             if self.port_label:
-                self.port_label.SetLabel(self.serial_device.port)
+                self.port_label.SetLabel(self.serial_device.port or "")
         elif value == Step.CONNECTING:
-            if self.progressbar and self.progressbar.Shown:
+            if self.progressbar and self.progressbar.IsShown():
                 self.progressbar.Hide()
 
     @property
-    def progress(self) -> int | None:
+    def progress(self) -> int:
         if self.progressbar:
             return self.progressbar.GetValue()
-
-        return None
+        return 0
 
     @progress.setter
     def progress(self, value):
-        if not value:
+        if value is None:
             return
 
-        new_value = value
-        current_value = self.progress
-        if current_value is not None:
-            new_value = value - current_value
-        # logging.debug(f"Progressbar {current_value}->{_value}")
-        if self.progressbar and new_value:
-            self.progressbar.Update(new_value, 100)
+        try:
+            clamped = max(0, min(100, int(value)))
+        except Exception as e:
+            logging.exception("Exception clamped progress value", exc_info=e)
+            return
+
+        if self.progressbar:
+            current_value = int(self.progress or 0)
+            delta = clamped - current_value
+            if delta != 0 and current_value + delta > 0:  # Progressbar doesn't like 0
+                self.progressbar.Update(delta, 50)
 
     @property
     def dimmer(self):
@@ -264,11 +275,7 @@ class SpeedControlFrame(wx.Frame):
 
         old_dimmer = self.dimmer
         if old_dimmer != value:
-            logging.info(
-                f"CPU: {self.cpu_temp}, GPU: {self.gpu_temp}."
-                f" {env.PWM_COMMAND}: {old_dimmer} -> {value}"
-            )
-
+            logging.info(f"CPU: {self.cpu_temp}, GPU: {self.gpu_temp}. {env.PWM_COMMAND}: {old_dimmer} -> {value}")
             StartCoroutine(self.serial_device.set_dimmer_value(value), self)
             # self.serial_device.set_dimmer_value(value)
         self._dimmer = value
@@ -312,11 +319,25 @@ class SpeedControlFrame(wx.Frame):
         try:
             while True:
                 # logging.debug("connect")
+                # noinspection PyUnreachableCode
+                # I don't know why this inspection triggers
                 if self.serial_device.connected and self.step != Step.CONNECTED:
                     self.step = Step.CONNECTED
                 elif self.step == Step.CONNECTED and not self.serial_device.connected:
                     logging.debug("Disconnected. Reconnecting")
                     await self.connect()
+                elif self.step == Step.INIT:
+                    await self.connect()
+                elif self.step == Step.CONNECTING:
+                    logging.debug("connecting 2")
+                    self.step = Step.CONNECTING
+                    coms: List[ListPortInfo] = comports()
+                    coms_match = [_ for _ in coms if env.DEVICE_NAME in _.description]
+                    if coms_match:
+                        com = coms_match[0]
+                        self.serial_device.port = com.device
+                        logging.info(f"Serial Device found at {self.serial_device.port}")
+                        await self.connect()
                 elif self.step == Step.CONNECTED:
                     sensors = get_sensors()
                     cpu_temperatures = {
@@ -327,14 +348,13 @@ class SpeedControlFrame(wx.Frame):
                     gpu_temperatures = {
                         k: int(v)
                         for k, v in sensors.items()
-                        if env.GPU_SENSOR_FILTER == k
+                        if env.GPU_SENSOR_FILTER in k
                     }
 
                     self.cpu_temp = cpu_temp = max(cpu_temperatures.values() or [0])
                     self.gpu_temp = gpu_temp = max(gpu_temperatures.values() or [0])
 
-                    dimmer = await self.serial_device.read_dimmer_value()
-                    self.progress = self.dimmer = dimmer
+                    self.progress = dimmer = await self.serial_device.read_dimmer_value()
 
                     cpu_dimmer = calculate_dimmer_value(self.cpu_temp, env.TEMP_RANGES)
                     gpu_dimmer = calculate_dimmer_value(self.gpu_temp, env.TEMP_RANGES)
@@ -353,24 +373,7 @@ class SpeedControlFrame(wx.Frame):
                         # logging.info(f"Skipping too low: {dimmer} -> {new_value}")
                         pass
                     elif dimmer != new_value:
-                        logging.info(
-                            f"CPU: {cpu_temp}, GPU: {gpu_temp}. {env.PWM_COMMAND}: {dimmer} -> {new_value}"
-                        )
                         self.dimmer = new_value
-                elif self.step == Step.INIT:
-                    await self.connect()
-                elif self.step == Step.CONNECTING:
-                    logging.debug("connecting 2")
-                    self.step = Step.CONNECTING
-                    coms: List[ListPortInfo] = comports()
-                    coms_match = [_ for _ in coms if env.DEVICE_NAME in _.description]
-                    if coms_match:
-                        com = coms_match[0]
-                        self.serial_device.port = com.device
-                        logging.info(
-                            f"Serial Device found at {self.serial_device.port}"
-                        )
-                        await self.connect()
 
                 await asyncio.sleep(env.DELAY)
         except asyncio.CancelledError:

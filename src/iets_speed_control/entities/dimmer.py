@@ -11,7 +11,7 @@ class Dimmer(SerialDevice):
         self,
         port=env.DEFAULT_PORT,
         baudrate=env.SERIAL_BAUDRATE,
-        timeout=0.3,
+        timeout=env.SERIAL_TIMEOUT,
         dimmer_command=env.PWM_COMMAND,
     ):
         super().__init__(port=port, baudrate=baudrate, timeout=timeout)

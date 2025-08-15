@@ -127,6 +127,7 @@ class SerialDevice:
 
     async def set_field_value(self, field_name, value):
         await self.send_command(f"{field_name} {value}")
+        # await asyncio.sleep(0.1)
 
 
 async def main():

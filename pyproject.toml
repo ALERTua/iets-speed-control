@@ -27,12 +27,3 @@ iets-speed-control = "iets_speed_control.entrypoints.cli:cli"
 
 [project.gui-scripts]
 iets-speed-control-gui = "iets_speed_control.entrypoints.gui:gui"
-
-
-[build-system]
-requires = ["uv-build"]
-build-backend = "uv_build"
-
-[tool.uv.build-backend]
-module-name = "iets_speed_control"
-module-root = ""
