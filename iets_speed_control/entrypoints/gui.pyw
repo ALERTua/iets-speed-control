@@ -39,9 +39,9 @@ class SpeedControlTaskBarIcon(TaskBarIcon):
 
         # ------------
 
-        AsyncBind(wx.EVT_MENU, self.OnTaskBarActivate, self.frame, id=1)
-        AsyncBind(wx.EVT_MENU, self.OnTaskBarDeactivate, self.frame, id=2)
-        AsyncBind(wx.EVT_MENU, self.OnTaskBarClose, self.frame, id=3)
+        AsyncBind(wx.EVT_MENU, self.on_task_bar_activate, self.frame, id=1)
+        AsyncBind(wx.EVT_MENU, self.on_task_bar_deactivate, self.frame, id=2)
+        AsyncBind(wx.EVT_MENU, self.on_task_bar_close, self.frame, id=3)
 
     # -----------------------------------------------------------------------
 
@@ -52,14 +52,14 @@ class SpeedControlTaskBarIcon(TaskBarIcon):
         menu.Append(3, "Close")
         return menu
 
-    async def OnTaskBarClose(self, event):
+    async def on_task_bar_close(self, event):
         self.frame.Close()
 
-    async def OnTaskBarActivate(self, event):
+    async def on_task_bar_activate(self, event):
         if not self.frame.IsShown():
             self.frame.Show()
 
-    async def OnTaskBarDeactivate(self, event):
+    async def on_task_bar_deactivate(self, event):
         if self.frame.IsShown():
             self.frame.Hide()
 
