@@ -287,7 +287,7 @@ class SpeedControlFrame(wx.Frame):
 
     @property
     def gpu_temp(self):
-        return self._cpu_temp
+        return self._gpu_temp
 
     @gpu_temp.setter
     def gpu_temp(self, value):
