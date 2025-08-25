@@ -30,9 +30,7 @@ async def _cli():
                     coms_match = [_ for _ in coms if env.DEVICE_NAME in _.description]
                 if env.DEVICE_SERIAL:
                     coms_match = [
-                        _
-                        for _ in coms
-                        if _.serial_number and env.DEVICE_SERIAL in _.serial_number
+                        _ for _ in coms if _.serial_number and env.DEVICE_SERIAL in _.serial_number
                     ] or coms_match
 
                 if coms_match:
@@ -42,12 +40,8 @@ async def _cli():
                     await device.connect()
 
             sensors = get_sensors()
-            cpu_temperatures = {
-                k: int(v) for k, v in sensors.items() if env.CPU_SENSOR_FILTER in k
-            }
-            gpu_temperatures = {
-                k: int(v) for k, v in sensors.items() if env.GPU_SENSOR_FILTER == k
-            }
+            cpu_temperatures = {k: int(v) for k, v in sensors.items() if env.CPU_SENSOR_FILTER in k}
+            gpu_temperatures = {k: int(v) for k, v in sensors.items() if env.GPU_SENSOR_FILTER == k}
 
             cpu_temp = max(cpu_temperatures.values() or [0])
             gpu_temp = max(gpu_temperatures.values() or [0])
@@ -56,9 +50,7 @@ async def _cli():
                 dimmer = await device.read_dimmer_value()
 
                 if initial:
-                    logging.info(
-                        f"Starting with CPU: {cpu_temp}, GPU: {gpu_temp}. {env.PWM_COMMAND}: {dimmer}"
-                    )
+                    logging.info(f"Starting with CPU: {cpu_temp}, GPU: {gpu_temp}. {env.PWM_COMMAND}: {dimmer}")
                     initial = False
 
                 cpu_dimmer = calculate_dimmer_value(cpu_temp, env.TEMP_RANGES)
@@ -71,16 +63,11 @@ async def _cli():
                     if new_value < dimmer - env.MAX_STEP:  # limit down step
                         new_value = dimmer - env.MAX_STEP
 
-                if (
-                    dimmer is not None
-                    and abs(dimmer - new_value) < env.IGNORE_LESS_THAN
-                ):
+                if dimmer is not None and abs(dimmer - new_value) < env.IGNORE_LESS_THAN:
                     # logging.info(f"Skipping too low: {dimmer} -> {new_value}")
                     pass
                 elif dimmer != new_value:
-                    logging.info(
-                        f"CPU: {cpu_temp}, GPU: {gpu_temp}. {env.PWM_COMMAND}: {dimmer} -> {new_value}"
-                    )
+                    logging.info(f"CPU: {cpu_temp}, GPU: {gpu_temp}. {env.PWM_COMMAND}: {dimmer} -> {new_value}")
                     await device.set_dimmer_value(new_value)
 
                 await asyncio.sleep(env.DELAY)

@@ -19,10 +19,7 @@ def calculate_dimmer_value(temperature, temperature_ranges):
         dimmers_up.add(dimmer_up)
         if temp_down <= temperature < temp_up:
             # Calculate linear dimmer value within the current range
-            output = dimmer_down + int(
-                ((temperature - temp_down) / (temp_up - temp_down))
-                * (dimmer_up - dimmer_down)
-            )
+            output = dimmer_down + int(((temperature - temp_down) / (temp_up - temp_down)) * (dimmer_up - dimmer_down))
             break
 
     if output is None:
