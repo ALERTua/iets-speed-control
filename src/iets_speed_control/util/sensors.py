@@ -6,7 +6,7 @@ from wmi import WMI
 
 def get_sensors():
     # noinspection PyUnresolvedReferences
-    pythoncom.CoInitialize()
+    pythoncom.CoInitialize()  # type: ignore[union-attr]
     wmi_obj = WMI(namespace="root\\WMI")
     output = {}
     try:

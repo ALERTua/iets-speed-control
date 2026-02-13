@@ -30,7 +30,9 @@ Example: [ESP32_Tasmota](docs/ESP32_Tasmota.md)
 - Create `.env` and fill it using [.env.example](.env.example)
 
 ### Script Execution
-#### GUI
-- Use pre-built binaries or run [build.cmd](build.cmd)
+#### GUI (Tray)
+- Run `uv run iets-speed-control-tray` for the tray+GUI with CustomTkinter
+- Features: System tray icon, Auto/Manual mode, Manual speed slider
+- Minimize to tray, close button exits
 #### Console
-- Run [run.cmd](run.cmd) or `python -m source`
+- Run `uv run iets-speed-control` or [run.cmd](run.cmd)

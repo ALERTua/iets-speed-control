@@ -1,395 +1,430 @@
-import logging
-import wx
+"""
+Modern tray GUI entrypoint using pystray and CustomTkinter.
+
+Provides a system tray icon with menu and a GUI window for control.
+"""
+
 import asyncio
-
-from enum import Enum
-from typing import List, Optional
+import logging
+import threading
 from pathlib import Path
-from wxasync import AsyncBind, WxAsyncApp, StartCoroutine
+from typing import Optional, Callable
 
-from wx.adv import TaskBarIcon as TaskBarIcon
-from wx.lib.agw.pygauge import PyGauge
-from serial.tools.list_ports_common import ListPortInfo
-from serial.tools.list_ports_windows import comports
+import customtkinter as ctk
+from PIL import Image
+import pystray
+from pystray import MenuItem as Item
 
-from ..util import env
+from ..controller import Mode, SpeedController  # type: ignore[unresolved-import]
+from ..util import env  # type: ignore[unresolved-import]
 
-from ..entities.dimmer import Dimmer
-from ..util.tools import calculate_dimmer_value
+# Configure CustomTkinter
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
 
-from ..util.sensors import get_sensors
-
-APP_NAME = "iets-speed-control"
-
-
-class Step(Enum):
-    INIT = 0
-    CONNECTING = 1
-    CONNECTED = 2
+APP_NAME = "IETS Speed Control"
 
 
-class SpeedControlTaskBarIcon(TaskBarIcon):
-    def __init__(self, frame: wx.Frame):
-        TaskBarIcon.__init__(self)
+class ControlWindow(ctk.CTkFrame):
+    """Main control panel frame."""
 
-        self.frame = frame
+    def __init__(self, master, controller: SpeedController, on_exit: Callable):
+        super().__init__(master)
+        self.controller = controller
+        self.on_exit = on_exit
 
-        icon_path = Path(__file__).parent.parent.parent.parent / "media" / "icon.png"
-        icon = wx.Icon(str(icon_path), wx.BITMAP_TYPE_PNG)
-        self.SetIcon(icon, "Task bar icon")
+        self._build_ui()
+        self._setup_callbacks()
 
-        # ------------
+    def _build_ui(self):
+        """Build the UI components."""
+        # Configure grid
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=0)
+        self.rowconfigure(1, weight=0)
+        self.rowconfigure(2, weight=0)
+        self.rowconfigure(3, weight=0)
+        self.rowconfigure(4, weight=1)
 
-        AsyncBind(wx.EVT_MENU, self.on_task_bar_activate, self.frame.TopLevelParent, id=1)
-        AsyncBind(wx.EVT_MENU, self.on_task_bar_deactivate, self.frame.TopLevelParent, id=2)
-        AsyncBind(wx.EVT_MENU, self.on_task_bar_close, self.frame.TopLevelParent, id=3)
+        # Mode selection
+        mode_frame = ctk.CTkFrame(self)
+        mode_frame.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
 
-    # -----------------------------------------------------------------------
+        mode_label = ctk.CTkLabel(mode_frame, text="Mode:", font=("", 14))
+        mode_label.pack(side="left", padx=5)
 
-    def CreatePopupMenu(self):
-        menu = wx.Menu()
-        menu.Append(1, "Show")
-        menu.Append(2, "Hide")
-        menu.Append(3, "Close")
-        return menu
-
-    async def on_task_bar_close(self, event):
-        self.frame.Close()
-
-    async def on_task_bar_activate(self, event):
-        if not self.frame.IsShown():
-            self.frame.Show()
-
-    async def on_task_bar_deactivate(self, event):
-        if self.frame.IsShown():
-            self.frame.Hide()
-
-
-class SpeedControlFrame(wx.Frame):
-    def __init__(self, parent=None):
-        super(SpeedControlFrame, self).__init__(
-            parent, style=wx.DEFAULT_FRAME_STYLE ^ wx.MAXIMIZE_BOX
+        self.mode_var = ctk.StringVar(value=Mode.AUTO.value)
+        self.auto_radio = ctk.CTkRadioButton(
+            mode_frame, text="Auto", variable=self.mode_var,
+            value=Mode.AUTO.value, command=self._on_mode_change
         )
-        self.SetWindowStyle(style=self.GetWindowStyle() ^ wx.RESIZE_BORDER)
+        self.auto_radio.pack(side="left", padx=10)
 
-        icon_path = Path(__file__).parent.parent.parent / "media/icon.png"
-        if icon_path.exists():
-            icon = wx.Icon(str(icon_path), wx.BITMAP_TYPE_ANY, -1, -1)
-            self.SetIcon(icon)
-
-        self.tskic = SpeedControlTaskBarIcon(self)
-        AsyncBind(wx.EVT_CLOSE, self.on_close, self)
-        AsyncBind(wx.EVT_ICONIZE, self.draw, self)
-
-        self.step_label = None
-        self.port_label = None
-        self.progressbar: Optional[PyGauge] = None
-        self.gpu_value = None
-        self.gpu_label = None
-        self.cpu_value = None
-        self.cpu_label = None
-
-        self.serial_device = Dimmer()
-        self._step = Step.INIT
-        self._dimmer = 0
-        self._cpu_temp = 0
-        self._gpu_temp = 0
-        # self._loop_task = None
-
-        StartCoroutine(self.draw(), self)
-        self.SetMinSize(wx.Size(200, -1))
-
-        self.load_window_position()
-        self.start()
-
-    def load_window_position(self):
-        # noinspection PyUnresolvedReferences
-        config = wx.Config(APP_NAME)
-        x = config.ReadInt("WindowPosX", -1)
-        y = config.ReadInt("WindowPosY", -1)
-
-        # Get the desktop size
-        desktop = wx.Display().GetClientArea()
-        desktop_width, desktop_height = desktop.GetWidth(), desktop.GetHeight()
-
-        # Check if the saved position is within the desktop area
-        if x != -1 and y != -1 and 0 <= x < desktop_width and 0 <= y < desktop_height:
-            self.SetPosition(wx.Point(x, y))
-
-    def save_window_position(self):
-        pos = self.GetPosition()
-        # noinspection PyUnresolvedReferences
-        config = wx.Config(APP_NAME)
-        config.WriteInt("WindowPosX", pos.x)
-        config.WriteInt("WindowPosY", pos.y)
-        config.Flush()
-
-    async def draw(self, *args, **kwargs):
-        self.sizer()
-        self.GetSizer().Fit(self)
-        self.Layout()
-
-    async def on_close(self, event):
-        logging.debug("on_close")
-        self.save_window_position()
-        # Stop background loop
-        if hasattr(self, "_loop_task") and self._loop_task is not None and not self._loop_task.done():
-            self._loop_task.cancel()
-            try:
-                await self._loop_task
-            except asyncio.CancelledError:
-                pass
-        # Set fan to 0 on exit
-        self.dimmer = 0
-        # Destroy tray icon and window
-        self.tskic.Destroy()
-        self.Destroy()
-        event.Skip()  # Allow the window to close normally
-
-    def start(self):
-        logging.debug("start")
-        if self.__dict__.get('_loop_task', None) is None:
-            self._loop_task = StartCoroutine(self.loop_connect(), self)
-
-    def sizer(self):
-        logging.debug("generating sizer")
-        main_sizer = wx.BoxSizer(wx.VERTICAL)
-        center_sizer = wx.BoxSizer(wx.VERTICAL)
-        sizer = wx.GridBagSizer(5, 5)
-        sizer.SetEmptyCellSize(wx.Size(10, 10))
-
-        row = 0
-        column = 0
-
-        column += 1
-
-        self.cpu_label = wx.StaticText(
-            self, label="CPU", style=wx.ALIGN_CENTRE_HORIZONTAL
+        self.manual_radio = ctk.CTkRadioButton(
+            mode_frame, text="Manual", variable=self.mode_var,
+            value=Mode.MANUAL.value, command=self._on_mode_change
         )
-        sizer.Add(self.cpu_label, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
+        self.manual_radio.pack(side="left", padx=10)
 
-        column += 1
+        # Status frame
+        status_frame = ctk.CTkFrame(self)
+        status_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
 
-        self.cpu_value = wx.StaticText(self, style=wx.ALIGN_CENTRE_HORIZONTAL)
-        sizer.Add(self.cpu_value, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
+        self.status_label = ctk.CTkLabel(
+            status_frame, text="Status: Disconnected",
+            font=("", 12)
+        )
+        self.status_label.pack(pady=5)
 
-        column += 3
+        # Temperature display
+        temp_frame = ctk.CTkFrame(self)
+        temp_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
 
-        self.gpu_label = wx.StaticText(self, label="GPU", style=wx.ALIGN_CENTRE_HORIZONTAL)
-        sizer.Add(self.gpu_label, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
+        self.cpu_label = ctk.CTkLabel(
+            temp_frame, text="CPU: --°C", font=("", 14, "bold")
+        )
+        self.cpu_label.pack(side="left", padx=20, pady=10)
 
-        column += 1
+        self.gpu_label = ctk.CTkLabel(
+            temp_frame, text="GPU: --°C", font=("", 14, "bold")
+        )
+        self.gpu_label.pack(side="left", padx=20, pady=10)
 
-        self.gpu_value = wx.StaticText(self, style=wx.ALIGN_CENTRE_HORIZONTAL)
-        sizer.Add(self.gpu_value, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
+        self.speed_label = ctk.CTkLabel(
+            temp_frame, text="Fan: --%", font=("", 14, "bold")
+        )
+        self.speed_label.pack(side="left", padx=20, pady=10)
 
-        total_cols = column + 1
+        # Manual speed slider
+        self.slider_frame = ctk.CTkFrame(self)
+        self.slider_frame.grid(row=3, column=0, padx=10, pady=5, sticky="ew")
 
-        row += 1
-        column = 0
+        slider_label = ctk.CTkLabel(self.slider_frame, text="Manual Speed:", font=("", 12))
+        slider_label.pack(pady=5)
 
-        self.progressbar = PyGauge(self, range=100, size=(150, 18), style=wx.GA_HORIZONTAL)
-        self.progressbar.SetDrawValue(draw=True, drawPercent=True, font=None, colour=wx.BLACK, formatString=None)
-        # self.progressbar.SetBackgroundColour(wx.BLACK)
-        # self.progressbar.SetBorderColor(wx.BLACK)
-        self.progressbar.SetBarColour(wx.GREEN)
-        sizer.Add(
-            self.progressbar,
-            pos=(row, column),
-            span=(1, total_cols),
-            flag=wx.ALIGN_CENTRE,
+        self.speed_slider = ctk.CTkSlider(
+            self.slider_frame, from_=0, to=100,
+            number_of_steps=100,
+            command=self._on_slider_change
+        )
+        self.speed_slider.set(0)
+        self.speed_slider.pack(fill="x", padx=20, pady=5)
+
+        self.slider_value_label = ctk.CTkLabel(
+            self.slider_frame, text="0%", font=("", 12)
+        )
+        self.slider_value_label.pack(pady=5)
+
+        # Initially hide slider in auto mode
+        self._update_slider_visibility()
+
+        # Exit button
+        exit_btn = ctk.CTkButton(
+            self, text="Exit", command=self._on_exit_click,
+            fg_color="red", hover_color="darkred"
+        )
+        exit_btn.grid(row=4, column=0, padx=10, pady=20)
+
+    def _setup_callbacks(self):
+        """Setup controller callbacks."""
+        self.controller.set_callbacks(
+            on_status_change=self._on_status_change,
+            on_temps_change=self._on_temps_change,
+            on_speed_change=self._on_speed_change,
         )
 
-        row += 1
-        column = 0
-        self.step_label = wx.StaticText(self, style=wx.ALIGN_CENTRE_HORIZONTAL)
-        sizer.Add(self.step_label, pos=(row, column), span=(1, 1), flag=wx.ALIGN_CENTRE)
+    def _on_mode_change(self):
+        """Handle mode change."""
+        mode = Mode(self.mode_var.get())
+        self.controller.mode = mode
+        self._update_slider_visibility()
 
-        self.port_label = wx.StaticText(self, style=wx.ALIGN_CENTRE_HORIZONTAL)
-        sizer.Add(
-            self.port_label,
-            pos=(row, sizer.GetCols() - 2),
-            span=(1, 1),
-            flag=wx.ALIGN_CENTRE,
-        )
+        # If switching to manual, set initial speed to current fan speed
+        if mode == Mode.MANUAL:
+            current_speed = self.controller.current_speed
+            self.controller.manual_speed = current_speed
+            self.speed_slider.set(current_speed)
+            self.slider_value_label.configure(text=f"{current_speed}%")
 
-        sizer.Fit(self)
-        center_sizer.Add(sizer, 1, wx.ALIGN_CENTER | wx.ALL, 0)
-        main_sizer.Add(center_sizer, 1, wx.EXPAND | wx.ALL, 0)
-        self.SetSizer(main_sizer)
+    def _on_slider_change(self, value):
+        """Handle slider value change."""
+        speed = int(value)
+        self.slider_value_label.configure(text=f"{speed}%")
 
-    @property
-    def step(self):
-        return self._step
+        if self.controller.mode == Mode.MANUAL:
+            self.controller.manual_speed = speed
 
-    @step.setter
-    def step(self, value: Step):
-        step_old = self._step
-        if step_old == value:
-            return
+    def _on_status_change(self, connected: bool, running: bool):
+        """Handle status change from controller."""
+        status_text = "Connected" if connected else "Disconnected"
+        if running:
+            status_text += f" ({self.controller.mode.name})"
+        if connected and self.controller.port:
+            status_text += f" - {self.controller.port}"
+        self.status_label.configure(text=f"Status: {status_text}")
 
-        logging.debug(f"Step {step_old}->{value.name}")
-        self._step = value
-        if self.step_label:
-            self.step_label.SetLabel(value.name)
-        if value == Step.CONNECTED:
-            if self.progressbar and not self.progressbar.IsShown():
-                self.progressbar.Show()
-            if self.port_label:
-                self.port_label.SetLabel(self.serial_device.port or "")
-        elif value == Step.CONNECTING:
-            if self.progressbar and self.progressbar.IsShown():
-                self.progressbar.Hide()
+    def _on_temps_change(self, cpu: int, gpu: int):
+        """Handle temperature change from controller."""
+        self.cpu_label.configure(text=f"CPU: {cpu}°C")
+        self.gpu_label.configure(text=f"GPU: {gpu}°C")
 
-    @property
-    def progress(self) -> int:
-        if self.progressbar:
-            return self.progressbar.GetValue()
-        return 0
+    def _on_speed_change(self, speed: int):
+        """Handle speed change from controller."""
+        self.speed_label.configure(text=f"Fan: {speed}%")
 
-    @progress.setter
-    def progress(self, value):
-        if value is None:
-            return
+        # Update slider in manual mode without triggering callback
+        if self.controller.mode == Mode.MANUAL:
+            self.speed_slider.set(speed)
+            self.slider_value_label.configure(text=f"{speed}%")
 
+    def _update_slider_visibility(self):
+        """Show/hide slider based on mode."""
+        if self.controller.mode == Mode.MANUAL:
+            self.slider_frame.grid()
+        else:
+            self.slider_frame.grid_remove()
+
+    def _on_exit_click(self):
+        """Handle exit button click."""
+        self.on_exit()
+
+
+class GUIApp:
+    """Main application with tray icon and GUI window."""
+
+    def __init__(self):
+        self.controller = SpeedController()
+        self.window: Optional[ctk.CTk] = None
+        self.control_panel: Optional[ControlWindow] = None
+        self.tray_icon: Optional[pystray.Icon] = None
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self._running = False
+
+        # Load icon
+        self.icon_path = Path(__file__).parent.parent.parent.parent / "media" / "icon.ico"
+        self.icon_image = self._load_icon()
+
+    def _load_icon(self) -> Optional[Image.Image]:
+        """Load the application icon."""
         try:
-            clamped = max(0, min(100, int(value)))
+            if self.icon_path.exists():
+                return Image.open(self.icon_path)
+            else:
+                # Create a simple default icon
+                return Image.new('RGB', (64, 64), color='blue')
         except Exception as e:
-            logging.exception("Exception clamped progress value", exc_info=e)
+            logging.error(f"Failed to load icon: {e}")
+            return Image.new('RGB', (64, 64), color='blue')
+
+    def _create_tray_menu(self) -> list:
+        """Create the tray menu items."""
+        return [
+            Item("Show", self._show_window, default=True),
+            Item("Start", self._start_control),
+            Item("Stop", self._stop_control),
+            Item("Exit", self._exit_app),
+        ]
+
+    def _create_tray_icon(self) -> pystray.Icon:
+        """Create the system tray icon."""
+        menu = pystray.Menu(*self._create_tray_menu())
+        icon = pystray.Icon(
+            APP_NAME,
+            self.icon_image,
+            APP_NAME,
+            menu
+        )
+        return icon
+
+    def _create_window(self):
+        """Create the GUI window."""
+        self.window = ctk.CTk()
+        self.window.title(APP_NAME)
+        self.window.geometry("350x350")
+        self.window.resizable(False, False)
+
+        # Set window icon
+        if self.icon_path.exists():
+            self.window.iconbitmap(str(self.icon_path))
+
+        # Create control panel
+        self.control_panel = ControlWindow(
+            self.window, self.controller, self._exit_app
+        )
+        self.control_panel.pack(fill="both", expand=True)
+
+        # Handle window close (X button) - exits app
+        self.window.protocol("WM_DELETE_WINDOW", self._exit_app)
+
+        # Handle minimize - minimize to tray
+        self.window.bind("<Unmap>", self._on_minimize)
+
+        # Load window position
+        self._load_window_position()
+
+    def _on_minimize(self, event):
+        """Handle window minimize - hide to tray."""
+        if self.window and self.window.state() == "iconic":
+            # Window is minimized, hide it to tray
+            self.window.after(10, self._hide_window)
+
+    def _load_window_position(self):
+        """Load saved window position."""
+        if not self.window:
             return
-
-        if self.progressbar:
-            current_value = int(self.progress or 0)
-            delta = clamped - current_value
-            if delta != 0 and current_value + delta > 0:  # Progressbar doesn't like 0
-                self.progressbar.Update(delta, 50)
-
-    @property
-    def dimmer(self):
-        return self._dimmer
-
-    @dimmer.setter
-    def dimmer(self, value):
-        if value is None:
-            return
-
-        old_dimmer = self.dimmer
-        if old_dimmer != value:
-            logging.info(f"CPU: {self.cpu_temp}, GPU: {self.gpu_temp}. {env.PWM_COMMAND}: {old_dimmer} -> {value}")
-            StartCoroutine(self.serial_device.set_dimmer_value(value), self)
-            # self.serial_device.set_dimmer_value(value)
-        self._dimmer = value
-        self.progress = value
-
-    @property
-    def cpu_temp(self):
-        return self._cpu_temp
-
-    @cpu_temp.setter
-    def cpu_temp(self, value):
-        if self._cpu_temp != value:
-            self._cpu_temp = value
-            if self.cpu_value:
-                self.cpu_value.SetLabel(str(value))
-
-    @property
-    def gpu_temp(self):
-        return self._gpu_temp
-
-    @gpu_temp.setter
-    def gpu_temp(self, value):
-        if self._gpu_temp != value:
-            self._gpu_temp = value
-            if self.gpu_value:
-                self.gpu_value.SetLabel(str(value))
-
-    async def connect(self):
-        logging.debug("connecting")
-        self.step = Step.CONNECTING
-
-        coro = StartCoroutine(self.serial_device.connect(), self)
-        coro.add_done_callback(self.on_connect)
-
-    def on_connect(self, event=None):
-        if self.serial_device.connected:
-            logging.debug("connected")
-            self.step = Step.CONNECTED
-
-    async def loop_connect(self):
         try:
-            while True:
-                # logging.debug("connect")
-                # noinspection PyUnreachableCode
-                # I don't know why this inspection triggers
-                if self.serial_device.connected and self.step != Step.CONNECTED:
-                    self.step = Step.CONNECTED
-                elif self.step == Step.CONNECTED and not self.serial_device.connected:
-                    logging.debug("Disconnected. Reconnecting")
-                    await self.connect()
-                elif self.step == Step.INIT:
-                    await self.connect()
-                elif self.step == Step.CONNECTING:
-                    logging.debug("connecting 2")
-                    self.step = Step.CONNECTING
-                    coms: List[ListPortInfo] = comports()
-                    coms_match = [_ for _ in coms if env.DEVICE_NAME in _.description]
-                    if coms_match:
-                        com = coms_match[0]
-                        self.serial_device.port = com.device
-                        logging.info(f"Serial Device found at {self.serial_device.port}")
-                        await self.connect()
-                elif self.step == Step.CONNECTED:
-                    sensors = get_sensors()
-                    cpu_temperatures = {
-                        k: int(v)
-                        for k, v in sensors.items()
-                        if env.CPU_SENSOR_FILTER in k
-                    }
-                    gpu_temperatures = {
-                        k: int(v)
-                        for k, v in sensors.items()
-                        if env.GPU_SENSOR_FILTER in k
-                    }
+            import json
+            config_path = Path.home() / ".iets-speed-control" / "config.json"
+            if config_path.exists():
+                with open(config_path) as f:
+                    config = json.load(f)
+                    x = config.get("window_x", 100)
+                    y = config.get("window_y", 100)
+                    self.window.geometry(f"+{x}+{y}")
+        except Exception as e:
+            logging.debug(f"Could not load window position: {e}")
 
-                    self.cpu_temp = cpu_temp = max(cpu_temperatures.values() or [0])
-                    self.gpu_temp = gpu_temp = max(gpu_temperatures.values() or [0])
+    def _save_window_position(self):
+        """Save window position."""
+        if not self.window:
+            return
+        try:
+            import json
+            config_path = Path.home() / ".iets-speed-control" / "config.json"
+            config_path.parent.mkdir(exist_ok=True)
 
-                    self.progress = dimmer = await self.serial_device.read_dimmer_value()
+            geometry = self.window.geometry()
+            # Parse geometry string: WxH+X+Y
+            parts = geometry.split("+")
+            if len(parts) == 3:
+                x, y = int(parts[1]), int(parts[2])
+                config = {"window_x": x, "window_y": y}
+                with open(config_path, "w") as f:
+                    json.dump(config, f)
+        except Exception as e:
+            logging.debug(f"Could not save window position: {e}")
 
-                    cpu_dimmer = calculate_dimmer_value(self.cpu_temp, env.TEMP_RANGES)
-                    gpu_dimmer = calculate_dimmer_value(self.gpu_temp, env.TEMP_RANGES)
-                    new_value = max(cpu_dimmer, gpu_dimmer)
+    def _show_window(self, icon=None, item=None):
+        """Show the GUI window."""
+        if self.window:
+            self.window.after(0, self.window.deiconify)
+            self.window.after(0, self.window.state, "normal")
+            self.window.after(0, self.window.lift)
+            self.window.after(0, self.window.focus_force)
 
-                    if dimmer is not None and env.MAX_STEP:
-                        # if new_value > dimmer + MAX_STEP:  # limit up step
-                        #     new_value = dimmer + MAX_STEP
-                        if new_value < dimmer - env.MAX_STEP:  # limit down step
-                            new_value = dimmer - env.MAX_STEP
+    def _hide_window(self):
+        """Hide the GUI window."""
+        if self.window:
+            self._save_window_position()
+            self.window.withdraw()
 
-                    if (
-                        dimmer is not None
-                        and abs(dimmer - new_value) < env.IGNORE_LESS_THAN
-                    ):
-                        # logging.info(f"Skipping too low: {dimmer} -> {new_value}")
-                        pass
-                    elif dimmer != new_value:
-                        self.dimmer = new_value
+    def _start_control(self, icon=None, item=None):
+        """Start the control loop."""
+        if self.loop and not self.controller.running:
+            asyncio.run_coroutine_threadsafe(
+                self.controller.start(), self.loop
+            )
 
-                await asyncio.sleep(env.DELAY)
-        except asyncio.CancelledError:
-            self.dimmer = 0
+    def _stop_control(self, icon=None, item=None):
+        """Stop the control loop."""
+        if self.loop and self.controller.running:
+            asyncio.run_coroutine_threadsafe(
+                self.controller.stop(), self.loop
+            )
 
+    def _exit_app(self, icon=None, item=None):
+        """Exit the application."""
+        self._running = False
 
-async def _gui():
-    app = WxAsyncApp()
-    frame = SpeedControlFrame()
-    frame.Show()
-    app.SetTopWindow(frame)
-    await app.MainLoop()
+        # Stop controller synchronously
+        if self.loop and self.controller.running:
+            future = asyncio.run_coroutine_threadsafe(
+                self.controller.stop(), self.loop
+            )
+            try:
+                future.result(timeout=2.0)
+            except Exception as e:
+                logging.debug(f"Error stopping controller: {e}")
+
+        # Save window position
+        if self.window:
+            self._save_window_position()
+            self.window.after(0, self.window.destroy)
+
+        # Stop tray icon
+        if self.tray_icon:
+            self.tray_icon.stop()
+
+        # Stop the event loop
+        if self.loop:
+            self.loop.call_soon_threadsafe(self.loop.stop)
+
+    def _update_tray_tooltip(self):
+        """Update tray icon tooltip with current status."""
+        if self.tray_icon:
+            status = f"CPU: {self.controller.cpu_temp}°C | GPU: {self.controller.gpu_temp}°C | Fan: {self.controller.current_speed}%"
+            self.tray_icon.title = status
+
+    def _run_async_loop(self):
+        """Run the asyncio event loop in a separate thread."""
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
+
+        # Start controller
+        self.loop.create_task(self.controller.start())
+
+        # Run event loop
+        self.loop.run_forever()
+
+    def run(self):
+        """Run the application."""
+        self._running = True
+
+        # Create tray icon
+        self.tray_icon = self._create_tray_icon()
+
+        # Create GUI window
+        self._create_window()
+
+        # Start async loop in separate thread
+        async_thread = threading.Thread(target=self._run_async_loop, daemon=True)
+        async_thread.start()
+
+        # Setup periodic tooltip update
+        def update_tooltip():
+            if self._running and self.window:
+                self._update_tray_tooltip()
+                self.window.after(1000, update_tooltip)
+
+        if self.window:
+            self.window.after(1000, update_tooltip)
+
+        # Run tray icon in separate thread
+        tray_thread = threading.Thread(
+            target=self.tray_icon.run_detached,
+            daemon=True
+        )
+        tray_thread.start()
+
+        # Run GUI main loop (blocks)
+        if self.window:
+            self.window.mainloop()
+
+        # Cleanup
+        self._running = False
+        if self.loop:
+            self.loop.call_soon_threadsafe(self.loop.stop)
 
 
 def gui():
-    asyncio.run(_gui())
+    """Main entrypoint."""
+    logging.basicConfig(
+        level=logging.INFO if not env.VERBOSE else logging.DEBUG,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
+    app = GUIApp()
+    app.run()
 
 
 if __name__ == "__main__":

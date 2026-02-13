@@ -9,7 +9,9 @@ dependencies = [
     "pyserial>=3.5",
     "python-dotenv>=1.2.1",
     "wmi>=1.5.1",
-    "wxasync>=0.49",
+    "pystray>=0.19.5",
+    "customtkinter>=5.2.0",
+    "Pillow>=10.0.0",
 ]
 
 [dependency-groups]

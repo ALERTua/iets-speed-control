@@ -49,7 +49,7 @@ class SerialDevice:
         output = self.serial and self.serial.is_open and not self.serial.closed
         if output:
             try:
-                _ = self.serial.in_waiting
+                _ = self.serial.in_waiting  # type: ignore[union-attr]
             except SerialException as e:
                 if "Access is denied" in str(e):
                     return False
@@ -72,26 +72,28 @@ class SerialDevice:
         return True
 
     async def disconnect(self):
-        if self.connected:
+        if self.connected and self.serial:
             self.serial.close()
             logging.info(f"Disconnected from {self.port}")
 
     @require_connection
     async def send_command(self, command):
-        try:
-            await self.serial.write_async((command + "\n").encode())
-            await asyncio.sleep(0.1)  # Wait for the command to be processed
-        except Exception as e:
-            logging.error(f"Error sending command: {e}")
+        if self.serial:
+            try:
+                await self.serial.write_async((command + "\n").encode())
+                await asyncio.sleep(0.1)  # Wait for the command to be processed
+            except Exception as e:
+                logging.error(f"Error sending command: {e}")
 
     @require_connection
     async def _read_line(self):
-        try:
-            return (await self.serial.read_until_async()).decode()
-        # .strip()
-        except Exception as e:
-            logging.error(f"Error reading line: {e}")
-            return ""
+        if self.serial:
+            try:
+                return (await self.serial.read_until_async()).decode()
+            # .strip()
+            except Exception as e:
+                logging.error(f"Error reading line: {e}")
+        return ""
 
     async def _read_results(self):
         lines = []

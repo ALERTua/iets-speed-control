@@ -50,15 +50,3 @@ def strtobool(val):  # distutil strtobool
         return 0
     else:
         raise ValueError("invalid truth value %r" % (val,))
-
-
-if __name__ == "__main__":
-    temp_35 = calculate_dimmer_value(35)
-    temp_40 = calculate_dimmer_value(40)
-    temp_50 = calculate_dimmer_value(50)
-    temp_60 = calculate_dimmer_value(60)
-    temp_70 = calculate_dimmer_value(70)
-    temp_80 = calculate_dimmer_value(80)
-    temp_90 = calculate_dimmer_value(90)
-    temp_100 = calculate_dimmer_value(100)
-    pass
