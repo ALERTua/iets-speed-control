@@ -19,6 +19,7 @@ dev = [
     "pre-commit-uv",
     "pyinstaller",
     "ruff",
+    "rust-just",
 ]
 
 [tool.uv]
