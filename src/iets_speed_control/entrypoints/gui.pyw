@@ -192,6 +192,7 @@ class ControlWindow(ctk.CTkFrame):
 class GUIApp:
     """Main application with tray icon and GUI window."""
 
+    window = ctk.CTk
     def __init__(self):
         self.controller = SpeedController()
         self.window: Optional[ctk.CTk] = None
