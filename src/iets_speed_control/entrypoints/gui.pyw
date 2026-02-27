@@ -409,6 +409,7 @@ class GUIApp:
 
         # Run GUI main loop (blocks)
         if self.window:
+            self.window.iconify()
             self.window.mainloop()
 
         # Cleanup
