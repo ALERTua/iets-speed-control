@@ -28,10 +28,11 @@ APP_NAME = "IETS Speed Control"
 class ControlWindow(ctk.CTkFrame):
     """Main control panel frame."""
 
-    def __init__(self, master, controller: SpeedController, on_exit: Callable):
+    def __init__(self, master, controller: SpeedController, on_exit: Callable, gui_app: "GUIApp" = None):
         super().__init__(master)
         self.controller = controller
         self.on_exit = on_exit
+        self.gui_app = gui_app
 
         self._build_ui()
         self._setup_callbacks()
@@ -163,6 +164,10 @@ class ControlWindow(ctk.CTkFrame):
             status_text += f" - {self.controller.port}"
         self.status_label.configure(text=f"Status: {status_text}")
 
+        # Update tray icon based on connection status
+        if self.gui_app:
+            self.gui_app._update_tray_icon(connected)
+
     def _on_temps_change(self, cpu: int, gpu: int):
         """Handle temperature change from controller."""
         self.cpu_label.configure(text=f"CPU: {cpu}°C")
@@ -201,15 +206,18 @@ class GUIApp:
         self.loop: Optional[asyncio.AbstractEventLoop] = None
         self._running = False
 
-        # Load icon
+        # Load icons
         self.icon_path = Path(__file__).parent.parent.parent.parent / "media" / "icon.ico"
-        self.icon_image = self._load_icon()
+        self.icon_red_path = Path(__file__).parent.parent.parent.parent / "media" / "icon-red.ico"
+        self.icon_image = self._load_icon(self.icon_path)
+        self.icon_red_image = self._load_icon(self.icon_red_path)
+        self._is_connected = True  # Track connection status for icon
 
-    def _load_icon(self) -> Optional[Image.Image]:
+    def _load_icon(self, icon_path: Path) -> Optional[Image.Image]:
         """Load the application icon."""
         try:
-            if self.icon_path.exists():
-                return Image.open(self.icon_path)
+            if icon_path.exists():
+                return Image.open(icon_path)
             else:
                 # Create a simple default icon
                 return Image.new('RGB', (64, 64), color='blue')
@@ -237,6 +245,20 @@ class GUIApp:
         )
         return icon
 
+    def _update_tray_icon(self, connected: bool):
+        """Update the tray icon based on connection status."""
+        if connected == self._is_connected:
+            return  # No change needed
+
+        self._is_connected = connected
+
+        # Select the appropriate icon
+        icon_image = self.icon_red_image if not connected else self.icon_image
+
+        # Stop and recreate the tray icon with new image
+        if self.tray_icon:
+            self.tray_icon.icon = icon_image
+
     def _create_window(self):
         """Create the GUI window."""
         self.window = ctk.CTk()
@@ -250,7 +272,7 @@ class GUIApp:
 
         # Create control panel
         self.control_panel = ControlWindow(
-            self.window, self.controller, self._exit_app
+            self.window, self.controller, self._exit_app, self
         )
         self.control_panel.pack(fill="both", expand=True)
 
