@@ -1,6 +1,6 @@
-"""Raw WMI probes used to decide whether a sensor source is actually available.
+"""Shared fixtures: raw WMI probes for the sensor e2e tests, and the one Tk root for widget tests.
 
-These deliberately re-query WMI instead of reusing the providers, so an e2e test compares the
+The probes deliberately re-query WMI instead of reusing the providers, so an e2e test compares the
 provider against an independently obtained answer rather than against itself.
 """
 
@@ -18,6 +18,31 @@ from iets_speed_control.util import env
 pythoncom.CoInitialize()  # type: ignore[union-attr]
 
 logger = logging.getLogger(__name__)
+
+
+@pytest.fixture(scope="session")
+def tk_root():
+    """One mapped-but-invisible Tk root for the entire test session.
+
+    Two constraints forced this shape:
+      * Creating a second CTk root after the first is destroyed makes Tk fail with "Can't find a
+        usable init.tcl", so per-module roots silently turned widget tests into skips.
+      * Tk does not deliver synthesized mouse events to a withdrawn window, so the root has to stay
+        mapped. Zero alpha keeps it off the screen while remaining mapped.
+    """
+    ctk = pytest.importorskip("customtkinter")
+    try:
+        root = ctk.CTk()
+    except Exception as e:  # noqa: BLE001 -- any Tk/display failure means "cannot test widgets here"
+        pytest.skip(f"no Tk display available: {e}")
+
+    root.geometry("700x460")
+    root.attributes("-alpha", 0.0)
+    root.update()
+    try:
+        yield root
+    finally:
+        root.destroy()
 
 
 def probe_aida64() -> dict[str, float]:

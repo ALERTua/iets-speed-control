@@ -11,7 +11,7 @@ from serial.tools.list_ports_windows import comports
 from .entities.dimmer import Dimmer
 from .sensors import SensorProvider, create_provider
 from .util import env
-from .util.tools import MedianSmoother, calculate_dimmer_value
+from .util.tools import MedianSmoother, calculate_dimmer_value, curve_to_ranges, ranges_to_curve
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,10 @@ class SpeedController:
         self._cpu_smoother = MedianSmoother(env.TEMP_WINDOW)
         self._gpu_smoother = MedianSmoother(env.TEMP_WINDOW)
 
+        # The curve is editable at runtime from the GUI. Configuration only seeds it.
+        self._ranges = env.TEMP_RANGES
+        self._curve = ranges_to_curve(env.TEMP_RANGES)
+
     @property
     def mode(self) -> Mode:
         """Current control mode."""
@@ -103,6 +107,27 @@ class SpeedController:
     def current_speed(self) -> int:
         """Current fan speed."""
         return self._current_speed
+
+    @property
+    def curve(self) -> list[tuple[float, float]]:
+        """Fan curve as [(temperature, percent), ...]."""
+        return list(self._curve)
+
+    @curve.setter
+    def curve(self, points):
+        """Replace the curve; takes effect on the next tick.
+
+        The GUI runs on the Tk thread while the control loop runs on the asyncio thread, so the
+        new ranges are built first and published with a single attribute assignment. A tick either
+        sees the whole old curve or the whole new one.
+        """
+        ordered = sorted((float(t), float(p)) for t, p in points)
+        if len(ordered) < 2:
+            raise ValueError("a curve needs at least two points")
+
+        self._ranges = curve_to_ranges(ordered)
+        self._curve = ordered
+        logger.debug(f"Curve replaced: {ordered}")
 
     @property
     def port(self) -> str | None:
@@ -267,8 +292,9 @@ class SpeedController:
 
                     # Calculate new speed based on mode
                     if self._mode == Mode.AUTO:
-                        cpu_dimmer = calculate_dimmer_value(self._cpu_temp, env.TEMP_RANGES)
-                        gpu_dimmer = calculate_dimmer_value(self._gpu_temp, env.TEMP_RANGES)
+                        ranges = self._ranges  # read once: the GUI may swap it mid-tick
+                        cpu_dimmer = calculate_dimmer_value(self._cpu_temp, ranges)
+                        gpu_dimmer = calculate_dimmer_value(self._gpu_temp, ranges)
                         new_value = max(cpu_dimmer, gpu_dimmer)
 
                         # Apply step limits

@@ -2,6 +2,7 @@
 
 import statistics
 from collections import deque
+from itertools import pairwise
 
 
 class MedianSmoother:
@@ -30,9 +31,68 @@ class MedianSmoother:
         return tuple(self._samples)
 
 
-def calculate_dimmer_value(temperature, temperature_ranges):
+CURVE_TEMP_CEILING = 200  # upper bound of the trailing shelf; above it the fallback clamps anyway
+
+
+def normalize_ranges(temperature_ranges):
+    """Accept either the configured string form or an already structured sequence of ranges."""
     if isinstance(temperature_ranges, str):
+        # Legacy config format; replaced by structured YAML in plan 06.
         temperature_ranges = eval(temperature_ranges)
+    return tuple(tuple(r) for r in temperature_ranges)
+
+
+def curve_to_ranges(points):
+    """Turn curve points [(temp, percent), ...] into the range tuples the controller evaluates.
+
+    Consecutive points become one linear range each, plus flat shelves before the first point and
+    after the last, so a temperature outside the curve holds the nearest percentage instead of
+    falling back to an unrelated value.
+    """
+    ordered = sorted((float(t), float(p)) for t, p in points)
+    if not ordered:
+        raise ValueError("a curve needs at least one point")
+
+    ranges = []
+    first_temp, first_pct = ordered[0]
+    if first_temp > 0:
+        ranges.append((0.0, first_temp, first_pct, first_pct))
+
+    for (temp, pct), (next_temp, next_pct) in pairwise(ordered):
+        if next_temp > temp:  # skip degenerate ranges rather than dividing by zero later
+            ranges.append((temp, next_temp, pct, next_pct))
+
+    last_temp, last_pct = ordered[-1]
+    if last_temp < CURVE_TEMP_CEILING:
+        ranges.append((last_temp, float(CURVE_TEMP_CEILING), last_pct, last_pct))
+
+    return tuple(ranges)
+
+
+def ranges_to_curve(temperature_ranges):
+    """Derive curve points from range tuples, for seeding the editor from existing configuration.
+
+    Lossy on purpose: a range whose endpoints disagree with its neighbour's collapses to a single
+    point. It is a starting shape for the editor, not a round-trip guarantee.
+    """
+    ranges = normalize_ranges(temperature_ranges)
+    if not ranges:
+        return []
+
+    points = {}
+    for temp_down, temp_up, dimmer_down, dimmer_up in ranges:
+        points[float(temp_down)] = float(dimmer_down)
+        points[float(temp_up)] = float(dimmer_up)
+
+    # Drop the artificial shelves: a leading 0 C point and the ceiling carry no user intent.
+    points.pop(0.0, None)
+    points.pop(float(CURVE_TEMP_CEILING), None)
+
+    return sorted(points.items())
+
+
+def calculate_dimmer_value(temperature, temperature_ranges):
+    temperature_ranges = normalize_ranges(temperature_ranges)
     output = None
     temps_down = set()
     temps_up = set()
@@ -62,7 +122,10 @@ def calculate_dimmer_value(temperature, temperature_ranges):
             output = min_dimmer
         else:
             output = min_dimmer
-    return output
+
+    # Always an int: the PWM value goes onto the wire as "<command> <value>", and curve points are
+    # floats, so without this the device would receive "Dimmer 49.0".
+    return round(output)
 
 
 def strtobool(val):  # distutil strtobool
