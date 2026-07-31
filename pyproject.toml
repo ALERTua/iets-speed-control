@@ -18,6 +18,8 @@ dependencies = [
 dev = [
     "pre-commit-uv",
     "pyinstaller",
+    "pytest",
+    "pytest-asyncio",
     "ruff",
     "rust-just",
 ]
@@ -33,3 +35,12 @@ iets-speed-control = "iets_speed_control.entrypoints.cli:cli"
 
 [project.gui-scripts]
 iets-speed-control-gui = "iets_speed_control.entrypoints.gui:gui"
+
+[tool.pytest.ini_options]
+minversion = "8.3.5"
+addopts = "-ra -q -m 'not e2e'"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+markers = [
+    "e2e: marks tests as end-to-end tests that require real network access (deselect with '-m \"not e2e\"')",
+]
