@@ -1,5 +1,34 @@
 # do not import env here
 
+import statistics
+from collections import deque
+
+
+class MedianSmoother:
+    """Rolling median over the last `window` readings.
+
+    Median rather than a moving average on purpose: a single spurious spike is discarded outright
+    instead of being blended into the result, and a sensor sitting between two range boundaries
+    stops flip-flopping the fan.  A window of 1 disables smoothing.
+    """
+
+    def __init__(self, window: int = 1):
+        self.window = max(1, int(window))
+        self._samples: deque[float] = deque(maxlen=self.window)
+
+    def add(self, value: float) -> float:
+        """Record a reading and return the smoothed value."""
+        self._samples.append(float(value))
+        return statistics.median(self._samples)
+
+    def reset(self):
+        """Drop history, e.g. after the sensor source went away."""
+        self._samples.clear()
+
+    @property
+    def samples(self) -> tuple[float, ...]:
+        return tuple(self._samples)
+
 
 def calculate_dimmer_value(temperature, temperature_ranges):
     if isinstance(temperature_ranges, str):
@@ -49,4 +78,4 @@ def strtobool(val):  # distutil strtobool
     elif val in ("n", "no", "f", "false", "off", "0"):
         return 0
     else:
-        raise ValueError("invalid truth value %r" % (val,))
+        raise ValueError(f"invalid truth value {val!r}")

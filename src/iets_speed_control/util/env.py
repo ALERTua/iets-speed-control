@@ -1,15 +1,15 @@
 import os
-from .logger import logger_setup
-from .tools import strtobool
-import logging  # has to be here
 
 from dotenv import load_dotenv
 
+from .tools import strtobool
+
 load_dotenv()
 
+# Logging is configured by the entrypoints, not here -- importing settings must not touch global state.
 VERBOSE = strtobool(os.getenv("VERBOSE", "False"))
-logger_setup()
-logging.debug(f"env verbose: {VERBOSE}")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "")
+LOG_FILE = os.getenv("LOG_FILE", "")
 
 DEVICE_NAME = os.getenv("DEVICE_NAME", "USB-Enhanced-SERIAL CH9102")
 DEVICE_SERIAL = os.getenv("DEVICE_SERIAL", "568B022419")
@@ -19,9 +19,16 @@ SERIAL_BAUDRATE = int(os.getenv("SERIAL_BAUDRATE", "115200"))
 SERIAL_TIMEOUT = float(os.getenv("SERIAL_TIMEOUT", "0.3"))
 DELAY = float(os.getenv("DELAY", "1.1"))
 IGNORE_LESS_THAN = int(os.getenv("IGNORE_LESS_THAN", "0"))
+TEMP_WINDOW = int(os.getenv("TEMP_WINDOW", "5"))
+RESYNC_EVERY = int(os.getenv("RESYNC_EVERY", "30"))
+SENSOR_PROVIDER = os.getenv("SENSOR_PROVIDER", "aida64")
+LHM_WEB_URL = os.getenv("LHM_WEB_URL", "http://localhost:8085/data.json")
+LHM_WEB_TIMEOUT = float(os.getenv("LHM_WEB_TIMEOUT", "1.0"))
+LHM_WEB_USERNAME = os.getenv("LHM_WEB_USERNAME", "")
+LHM_WEB_PASSWORD = os.getenv("LHM_WEB_PASSWORD", "")
 CPU_SENSOR_FILTER = os.getenv("CPU_SENSOR_FILTER", "CPU")
 GPU_SENSOR_FILTER = os.getenv("GPU_SENSOR_FILTER", "GPU")
-MAX_STEP = int(os.getenv("MAX_STEP", 100))
+MAX_STEP = int(os.getenv("MAX_STEP", "100"))
 TEMP_RANGES = os.getenv(
     "TEMP_RANGES",
     "(0, min_temp, dimmer_zero, dimmer_zero),"

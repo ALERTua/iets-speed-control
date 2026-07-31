@@ -1,9 +1,5 @@
-from typing import Optional
-import logging
 from ..util import env
 from .serial_device import SerialDevice
-
-logging.basicConfig(level=logging.INFO)
 
 
 class Dimmer(SerialDevice):
@@ -17,7 +13,7 @@ class Dimmer(SerialDevice):
         super().__init__(port=port, baudrate=baudrate, timeout=timeout)
         self.dimmer_command = dimmer_command
 
-    async def read_dimmer_value(self) -> Optional[int]:
+    async def read_dimmer_value(self) -> int | None:
         return await self.read_field_value(self.dimmer_command)
 
     async def set_dimmer_value(self, value):

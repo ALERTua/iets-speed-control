@@ -1,15 +1,14 @@
 import asyncio
 import json
-import re
 import logging
-from typing import Optional
+import re
 
 import aioserial
 from serial.serialutil import SerialException
 
 from ..util import env
 
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def require_connection(func):
@@ -17,7 +16,7 @@ def require_connection(func):
         if not self.connected:
             await self.connect()
         if not self.connected:
-            logging.error("Connection not established.")
+            logger.error("Connection not established.")
             return None
 
         return await func(self, *args, **kwargs)
@@ -35,7 +34,7 @@ class SerialDevice:
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
-        self.serial: Optional[aioserial.AioSerial] = None
+        self.serial: aioserial.AioSerial | None = None
 
     async def __aenter__(self):
         await self.connect()
@@ -65,16 +64,17 @@ class SerialDevice:
                     write_timeout=self.timeout,
                     timeout=self.timeout,
                 )
-                logging.info(f"Connected to {self.port}")
-            except Exception as e:
-                logging.error(f"Error: Unable to connect to {self.port}. {e}")
+                logger.info(f"Connected to {self.port}")
+            except (OSError, ValueError) as e:
+                # SerialException subclasses OSError; ValueError covers bad port/baudrate settings.
+                logger.error(f"Error: Unable to connect to {self.port}. {e}")
                 return False
         return True
 
     async def disconnect(self):
         if self.connected and self.serial:
             self.serial.close()
-            logging.info(f"Disconnected from {self.port}")
+            logger.info(f"Disconnected from {self.port}")
 
     @require_connection
     async def send_command(self, command):
@@ -82,8 +82,8 @@ class SerialDevice:
             try:
                 await self.serial.write_async((command + "\n").encode())
                 await asyncio.sleep(0.1)  # Wait for the command to be processed
-            except Exception as e:
-                logging.error(f"Error sending command: {e}")
+            except OSError as e:
+                logger.error(f"Error sending command: {e}")
 
     @require_connection
     async def _read_line(self):
@@ -91,8 +91,8 @@ class SerialDevice:
             try:
                 return (await self.serial.read_until_async()).decode()
             # .strip()
-            except Exception as e:
-                logging.error(f"Error reading line: {e}")
+            except OSError as e:
+                logger.error(f"Error reading line: {e}")
         return ""
 
     async def _read_results(self):
@@ -109,8 +109,8 @@ class SerialDevice:
         for result in results:
             try:
                 output.append(json.loads(result))
-            except Exception as e:
-                logging.debug(f"Error parsing result: {type(e)} {str(e)}")
+            except (json.JSONDecodeError, TypeError) as e:
+                logger.debug(f"Error parsing result {result!r}: {e}")
                 continue
 
         return output
@@ -122,7 +122,7 @@ class SerialDevice:
 
         return results[0]
 
-    async def read_field_value(self, field_name) -> Optional[int]:
+    async def read_field_value(self, field_name) -> int | None:
         await self.send_command(field_name)
         result = await self.read_command_result()
         return result.get(field_name, None) if result else None

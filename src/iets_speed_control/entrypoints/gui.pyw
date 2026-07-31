@@ -7,16 +7,19 @@ Provides a system tray icon with menu and a GUI window for control.
 import asyncio
 import logging
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Optional, Callable
+from tkinter import TclError
 
 import customtkinter as ctk
-from PIL import Image
 import pystray
+from PIL import Image
 from pystray import MenuItem as Item
 
 from ..controller import Mode, SpeedController  # type: ignore[unresolved-import]
-from ..util import env  # type: ignore[unresolved-import]
+from ..util.logger import configure_logging  # type: ignore[unresolved-import]
+
+logger = logging.getLogger(__name__)
 
 # Configure CustomTkinter
 ctk.set_appearance_mode("dark")
@@ -28,7 +31,7 @@ APP_NAME = "IETS Speed Control"
 class ControlWindow(ctk.CTkFrame):
     """Main control panel frame."""
 
-    def __init__(self, master, controller: SpeedController, on_exit: Callable, gui_app: "GUIApp" = None):
+    def __init__(self, master, controller: SpeedController, on_exit: Callable, gui_app: GUIApp = None):
         super().__init__(master)
         self.controller = controller
         self.on_exit = on_exit
@@ -56,14 +59,12 @@ class ControlWindow(ctk.CTkFrame):
 
         self.mode_var = ctk.StringVar(value=Mode.AUTO.value)
         self.auto_radio = ctk.CTkRadioButton(
-            mode_frame, text="Auto", variable=self.mode_var,
-            value=Mode.AUTO.value, command=self._on_mode_change
+            mode_frame, text="Auto", variable=self.mode_var, value=Mode.AUTO.value, command=self._on_mode_change
         )
         self.auto_radio.pack(side="left", padx=10)
 
         self.manual_radio = ctk.CTkRadioButton(
-            mode_frame, text="Manual", variable=self.mode_var,
-            value=Mode.MANUAL.value, command=self._on_mode_change
+            mode_frame, text="Manual", variable=self.mode_var, value=Mode.MANUAL.value, command=self._on_mode_change
         )
         self.manual_radio.pack(side="left", padx=10)
 
@@ -71,29 +72,20 @@ class ControlWindow(ctk.CTkFrame):
         status_frame = ctk.CTkFrame(self)
         status_frame.grid(row=1, column=0, padx=10, pady=5, sticky="ew")
 
-        self.status_label = ctk.CTkLabel(
-            status_frame, text="Status: Disconnected",
-            font=("", 12)
-        )
+        self.status_label = ctk.CTkLabel(status_frame, text="Status: Disconnected", font=("", 12))
         self.status_label.pack(pady=5)
 
         # Temperature display
         temp_frame = ctk.CTkFrame(self)
         temp_frame.grid(row=2, column=0, padx=10, pady=5, sticky="ew")
 
-        self.cpu_label = ctk.CTkLabel(
-            temp_frame, text="CPU: --°C", font=("", 14, "bold")
-        )
+        self.cpu_label = ctk.CTkLabel(temp_frame, text="CPU: --°C", font=("", 14, "bold"))
         self.cpu_label.pack(side="left", padx=20, pady=10)
 
-        self.gpu_label = ctk.CTkLabel(
-            temp_frame, text="GPU: --°C", font=("", 14, "bold")
-        )
+        self.gpu_label = ctk.CTkLabel(temp_frame, text="GPU: --°C", font=("", 14, "bold"))
         self.gpu_label.pack(side="left", padx=20, pady=10)
 
-        self.speed_label = ctk.CTkLabel(
-            temp_frame, text="Fan: --%", font=("", 14, "bold")
-        )
+        self.speed_label = ctk.CTkLabel(temp_frame, text="Fan: --%", font=("", 14, "bold"))
         self.speed_label.pack(side="left", padx=20, pady=10)
 
         # Manual speed slider
@@ -104,26 +96,19 @@ class ControlWindow(ctk.CTkFrame):
         slider_label.pack(pady=5)
 
         self.speed_slider = ctk.CTkSlider(
-            self.slider_frame, from_=0, to=100,
-            number_of_steps=100,
-            command=self._on_slider_change
+            self.slider_frame, from_=0, to=100, number_of_steps=100, command=self._on_slider_change
         )
         self.speed_slider.set(0)
         self.speed_slider.pack(fill="x", padx=20, pady=5)
 
-        self.slider_value_label = ctk.CTkLabel(
-            self.slider_frame, text="0%", font=("", 12)
-        )
+        self.slider_value_label = ctk.CTkLabel(self.slider_frame, text="0%", font=("", 12))
         self.slider_value_label.pack(pady=5)
 
         # Initially hide slider in auto mode
         self._update_slider_visibility()
 
         # Exit button
-        exit_btn = ctk.CTkButton(
-            self, text="Exit", command=self._on_exit_click,
-            fg_color="red", hover_color="darkred"
-        )
+        exit_btn = ctk.CTkButton(self, text="Exit", command=self._on_exit_click, fg_color="red", hover_color="darkred")
         exit_btn.grid(row=4, column=0, padx=10, pady=20)
 
     def _setup_callbacks(self):
@@ -198,12 +183,13 @@ class GUIApp:
     """Main application with tray icon and GUI window."""
 
     window = ctk.CTk
+
     def __init__(self):
         self.controller = SpeedController()
-        self.window: Optional[ctk.CTk] = None
-        self.control_panel: Optional[ControlWindow] = None
-        self.tray_icon: Optional[pystray.Icon] = None
-        self.loop: Optional[asyncio.AbstractEventLoop] = None
+        self.window: ctk.CTk | None = None
+        self.control_panel: ControlWindow | None = None
+        self.tray_icon: pystray.Icon | None = None
+        self.loop: asyncio.AbstractEventLoop | None = None
         self._running = False
 
         # Load icons
@@ -213,17 +199,17 @@ class GUIApp:
         self.icon_red_image = self._load_icon(self.icon_red_path)
         self._is_connected = True  # Track connection status for icon
 
-    def _load_icon(self, icon_path: Path) -> Optional[Image.Image]:
+    def _load_icon(self, icon_path: Path) -> Image.Image | None:
         """Load the application icon."""
         try:
             if icon_path.exists():
                 return Image.open(icon_path)
             else:
                 # Create a simple default icon
-                return Image.new('RGB', (64, 64), color='blue')
-        except Exception as e:
-            logging.error(f"Failed to load icon: {e}")
-            return Image.new('RGB', (64, 64), color='blue')
+                return Image.new("RGB", (64, 64), color="blue")
+        except (OSError, ValueError) as e:
+            logger.error(f"Failed to load icon: {e}")
+            return Image.new("RGB", (64, 64), color="blue")
 
     def _create_tray_menu(self) -> list:
         """Create the tray menu items."""
@@ -237,12 +223,7 @@ class GUIApp:
     def _create_tray_icon(self) -> pystray.Icon:
         """Create the system tray icon."""
         menu = pystray.Menu(*self._create_tray_menu())
-        icon = pystray.Icon(
-            APP_NAME,
-            self.icon_image,
-            APP_NAME,
-            menu
-        )
+        icon = pystray.Icon(APP_NAME, self.icon_image, APP_NAME, menu)
         return icon
 
     def _update_tray_icon(self, connected: bool):
@@ -271,9 +252,7 @@ class GUIApp:
             self.window.iconbitmap(str(self.icon_path))
 
         # Create control panel
-        self.control_panel = ControlWindow(
-            self.window, self.controller, self._exit_app, self
-        )
+        self.control_panel = ControlWindow(self.window, self.controller, self._exit_app, self)
         self.control_panel.pack(fill="both", expand=True)
 
         # Handle window close (X button) - exits app
@@ -297,6 +276,7 @@ class GUIApp:
             return
         try:
             import json
+
             config_path = Path.home() / ".iets-speed-control" / "config.json"
             if config_path.exists():
                 with open(config_path) as f:
@@ -304,8 +284,9 @@ class GUIApp:
                     x = config.get("window_x", 100)
                     y = config.get("window_y", 100)
                     self.window.geometry(f"+{x}+{y}")
-        except Exception as e:
-            logging.debug(f"Could not load window position: {e}")
+        except (OSError, ValueError, TclError) as e:
+            # TclError: a corrupted config could hold a geometry string Tk refuses.
+            logger.debug(f"Could not load window position: {e}")
 
     def _save_window_position(self):
         """Save window position."""
@@ -313,6 +294,7 @@ class GUIApp:
             return
         try:
             import json
+
             config_path = Path.home() / ".iets-speed-control" / "config.json"
             config_path.parent.mkdir(exist_ok=True)
 
@@ -324,8 +306,8 @@ class GUIApp:
                 config = {"window_x": x, "window_y": y}
                 with open(config_path, "w") as f:
                     json.dump(config, f)
-        except Exception as e:
-            logging.debug(f"Could not save window position: {e}")
+        except (OSError, ValueError, TclError) as e:
+            logger.debug(f"Could not save window position: {e}")
 
     def _show_window(self, icon=None, item=None):
         """Show the GUI window."""
@@ -344,16 +326,12 @@ class GUIApp:
     def _start_control(self, icon=None, item=None):
         """Start the control loop."""
         if self.loop and not self.controller.running:
-            asyncio.run_coroutine_threadsafe(
-                self.controller.start(), self.loop
-            )
+            asyncio.run_coroutine_threadsafe(self.controller.start(), self.loop)
 
     def _stop_control(self, icon=None, item=None):
         """Stop the control loop."""
         if self.loop and self.controller.running:
-            asyncio.run_coroutine_threadsafe(
-                self.controller.stop(), self.loop
-            )
+            asyncio.run_coroutine_threadsafe(self.controller.stop(), self.loop)
 
     def _exit_app(self, icon=None, item=None):
         """Exit the application."""
@@ -361,13 +339,11 @@ class GUIApp:
 
         # Stop controller synchronously
         if self.loop and self.controller.running:
-            future = asyncio.run_coroutine_threadsafe(
-                self.controller.stop(), self.loop
-            )
+            future = asyncio.run_coroutine_threadsafe(self.controller.stop(), self.loop)
             try:
                 future.result(timeout=2.0)
-            except Exception as e:
-                logging.debug(f"Error stopping controller: {e}")
+            except Exception as e:  # noqa: BLE001 -- surfaces whatever controller.stop() raised, on shutdown
+                logger.debug(f"Error stopping controller: {e}")
 
         # Save window position
         if self.window:
@@ -423,10 +399,7 @@ class GUIApp:
             self.window.after(1000, update_tooltip)
 
         # Run tray icon in separate thread
-        tray_thread = threading.Thread(
-            target=self.tray_icon.run_detached,
-            daemon=True
-        )
+        tray_thread = threading.Thread(target=self.tray_icon.run_detached, daemon=True)
         tray_thread.start()
 
         # Run GUI main loop (blocks)
@@ -442,10 +415,7 @@ class GUIApp:
 
 def gui():
     """Main entrypoint."""
-    logging.basicConfig(
-        level=logging.INFO if not env.VERBOSE else logging.DEBUG,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    configure_logging()
 
     app = GUIApp()
     app.run()

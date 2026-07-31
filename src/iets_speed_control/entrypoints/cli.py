@@ -4,6 +4,9 @@ import asyncio
 import logging
 
 from ..controller import SpeedController
+from ..util.logger import configure_logging
+
+logger = logging.getLogger(__name__)
 
 
 async def _cli():
@@ -14,12 +17,12 @@ async def _cli():
     def on_status(connected, running):
         nonlocal initial
         if initial and connected:
-            logging.info(
+            logger.info(
                 f"Starting with CPU: {controller.cpu_temp}, GPU: {controller.gpu_temp}. Fan: {controller.current_speed}"
             )
             initial = False
         elif not connected:
-            logging.info(f"No device connected. CPU: {controller.cpu_temp}, GPU: {controller.gpu_temp}")
+            logger.info(f"No device connected. CPU: {controller.cpu_temp}, GPU: {controller.gpu_temp}")
 
     controller.set_callbacks(on_status_change=on_status)
 
@@ -35,12 +38,13 @@ async def _cli():
                 await asyncio.sleep(9)  # Additional wait (total 10s)
 
     except asyncio.CancelledError:
-        logging.info("Setting fan to 0")
+        logger.info("Setting fan to 0")
         await controller.shutdown()
 
 
 def cli():
     """Main CLI entrypoint."""
+    configure_logging()
     return asyncio.run(_cli())
 
 

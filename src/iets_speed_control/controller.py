@@ -2,15 +2,18 @@
 
 import asyncio
 import logging
+from collections.abc import Callable
 from enum import Enum
-from typing import Optional, Callable
+
 from serial.tools.list_ports_common import ListPortInfo
 from serial.tools.list_ports_windows import comports
 
 from .entities.dimmer import Dimmer
+from .sensors import SensorProvider, create_provider
 from .util import env
-from .util.sensors import get_sensors
-from .util.tools import calculate_dimmer_value
+from .util.tools import MedianSmoother, calculate_dimmer_value
+
+logger = logging.getLogger(__name__)
 
 
 class Mode(Enum):
@@ -28,23 +31,32 @@ class SpeedController:
     In MANUAL mode, fan speed is set directly by the user.
     """
 
-    def __init__(self):
+    def __init__(self, sensor_provider: SensorProvider | None = None):
         self.device = Dimmer()
+        self.sensors = sensor_provider or create_provider(env.SENSOR_PROVIDER)
         self._mode = Mode.AUTO
         self._manual_speed = 0
         self._running = False
-        self._loop_task: Optional[asyncio.Task] = None
+        self._loop_task: asyncio.Task | None = None
 
         # Status callbacks
-        self._on_status_change: Optional[Callable] = None
-        self._on_temps_change: Optional[Callable] = None
-        self._on_speed_change: Optional[Callable] = None
+        self._on_status_change: Callable | None = None
+        self._on_temps_change: Callable | None = None
+        self._on_speed_change: Callable | None = None
 
         # Current status
         self._cpu_temp = 0
         self._gpu_temp = 0
         self._current_speed = 0
         self._connected = False
+
+        # The value we last wrote is the source of truth; the device is only re-read on
+        # (re)connect and every RESYNC_EVERY ticks, to catch changes made outside this app.
+        self._last_sent: int | None = None
+        self._ticks_since_resync = 0
+
+        self._cpu_smoother = MedianSmoother(env.TEMP_WINDOW)
+        self._gpu_smoother = MedianSmoother(env.TEMP_WINDOW)
 
     @property
     def mode(self) -> Mode:
@@ -55,7 +67,7 @@ class SpeedController:
     def mode(self, value: Mode):
         if self._mode != value:
             self._mode = value
-            logging.info(f"Mode changed to {value.name}")
+            logger.info(f"Mode changed to {value.name}")
 
     @property
     def manual_speed(self) -> int:
@@ -65,7 +77,7 @@ class SpeedController:
     @manual_speed.setter
     def manual_speed(self, value: int):
         self._manual_speed = max(0, min(100, int(value)))
-        logging.debug(f"Manual speed set to {self._manual_speed}")
+        logger.debug(f"Manual speed set to {self._manual_speed}")
 
     @property
     def running(self) -> bool:
@@ -93,15 +105,15 @@ class SpeedController:
         return self._current_speed
 
     @property
-    def port(self) -> Optional[str]:
+    def port(self) -> str | None:
         """Current serial port."""
         return self.device.port
 
     def set_callbacks(
         self,
-        on_status_change: Optional[Callable] = None,
-        on_temps_change: Optional[Callable] = None,
-        on_speed_change: Optional[Callable] = None,
+        on_status_change: Callable | None = None,
+        on_temps_change: Callable | None = None,
+        on_speed_change: Callable | None = None,
     ):
         """Set callback functions for status updates."""
         self._on_status_change = on_status_change
@@ -131,7 +143,7 @@ class SpeedController:
         self._running = True
         self._loop_task = asyncio.create_task(self._control_loop())
         self._notify_status()
-        logging.info("Control loop started")
+        logger.info("Control loop started")
 
     async def stop(self):
         """Stop the control loop."""
@@ -150,14 +162,39 @@ class SpeedController:
         # Set fan to 0 when stopping
         await self._set_fan_speed(0)
         self._notify_status()
-        logging.info("Control loop stopped")
+        logger.info("Control loop stopped")
 
     async def _set_fan_speed(self, value: int):
         """Set the fan speed on the device."""
         if self.device.connected:
             await self.device.set_dimmer_value(value)
+            self._last_sent = value
             self._current_speed = value
             self._notify_speed()
+
+    async def _current_dimmer(self) -> int | None:
+        """Return the device's dimmer value, reading it over serial only when necessary.
+
+        Re-reading every tick doubles the serial traffic and costs a read timeout each time, so the
+        value we last wrote is reused instead. The device is polled on (re)connect, when we have no
+        value yet, and every RESYNC_EVERY ticks so an external change (Tasmota web UI, a reboot) is
+        still picked up.
+        """
+        due = env.RESYNC_EVERY and self._ticks_since_resync >= env.RESYNC_EVERY
+        if self._last_sent is not None and not due:
+            self._ticks_since_resync += 1
+            return self._last_sent
+
+        self._ticks_since_resync = 0
+        reported = await self.device.read_dimmer_value()
+        if reported is None:
+            return self._last_sent
+
+        if self._last_sent is not None and reported != self._last_sent:
+            logger.warning(f"{env.PWM_COMMAND} changed outside this app: {self._last_sent} -> {reported}")
+
+        self._last_sent = reported
+        return reported
 
     async def _connect(self) -> bool:
         """Attempt to connect to the device."""
@@ -184,7 +221,7 @@ class SpeedController:
         if coms_match:
             com = coms_match[0]
             self.device.port = com.device
-            logging.info(f"Serial Device found at {self.device.port}")
+            logger.info(f"Serial Device found at {self.device.port}")
             await self.device.connect()
 
         self._connected = self.device.connected
@@ -202,17 +239,31 @@ class SpeedController:
                 if self.device.connected:
                     self._connected = True
 
-                    # Read temperatures
-                    sensors = get_sensors()
-                    cpu_temps = {k: int(v) for k, v in sensors.items() if env.CPU_SENSOR_FILTER in k}
-                    gpu_temps = {k: int(v) for k, v in sensors.items() if env.GPU_SENSOR_FILTER in k}
+                    # Read temperatures. WMI is blocking, so keep it off the event loop.
+                    try:
+                        sensors = await asyncio.to_thread(self.sensors.get_temperatures)
+                    except Exception as e:  # noqa: BLE001 -- WMI/COM raise arbitrary types; never kill the loop
+                        logger.error(f"Error reading sensors: {e}")
+                        await asyncio.sleep(env.DELAY)
+                        continue
 
-                    self._cpu_temp = max(cpu_temps.values() or [0])
-                    self._gpu_temp = max(gpu_temps.values() or [0])
+                    cpu_temps = [v for k, v in sensors.items() if env.CPU_SENSOR_FILTER in k]
+                    gpu_temps = [v for k, v in sensors.items() if env.GPU_SENSOR_FILTER in k]
+
+                    # Round rather than truncate: sources such as the LibreHardwareMonitor web
+                    # server report fractions, and int() would bias every reading downwards.
+                    raw_cpu = max(cpu_temps or [0])
+                    raw_gpu = max(gpu_temps or [0])
+                    self._cpu_temp = round(self._cpu_smoother.add(raw_cpu))
+                    self._gpu_temp = round(self._gpu_smoother.add(raw_gpu))
+                    if (raw_cpu, raw_gpu) != (self._cpu_temp, self._gpu_temp):
+                        logger.debug(
+                            f"Smoothed CPU {raw_cpu} -> {self._cpu_temp}, GPU {raw_gpu} -> {self._gpu_temp}"
+                            f" (median of {env.TEMP_WINDOW})"
+                        )
                     self._notify_temps()
 
-                    # Read current dimmer value
-                    current_dimmer = await self.device.read_dimmer_value()
+                    current_dimmer = await self._current_dimmer()
 
                     # Calculate new speed based on mode
                     if self._mode == Mode.AUTO:
@@ -222,8 +273,7 @@ class SpeedController:
 
                         # Apply step limits
                         if current_dimmer is not None and env.MAX_STEP:
-                            if new_value < current_dimmer - env.MAX_STEP:
-                                new_value = current_dimmer - env.MAX_STEP
+                            new_value = max(new_value, current_dimmer - env.MAX_STEP)
 
                         # Apply minimum change threshold
                         if current_dimmer is not None and abs(current_dimmer - new_value) < env.IGNORE_LESS_THAN:
@@ -234,7 +284,7 @@ class SpeedController:
 
                     # Update speed if changed
                     if current_dimmer != new_value:
-                        logging.info(
+                        logger.info(
                             f"CPU: {self._cpu_temp}, GPU: {self._gpu_temp}. "
                             f"{env.PWM_COMMAND}: {current_dimmer} -> {new_value}"
                         )
@@ -244,15 +294,19 @@ class SpeedController:
                         self._notify_speed()
                 else:
                     self._connected = False
+                    # Forget the cached value so the next connection re-reads the real one.
+                    self._last_sent = None
+                    self._ticks_since_resync = 0
                     self._notify_status()
 
                 await asyncio.sleep(env.DELAY)
 
         except asyncio.CancelledError:
-            logging.debug("Control loop cancelled")
+            logger.debug("Control loop cancelled")
             raise
-        except Exception as e:
-            logging.exception(f"Error in control loop: {e}")
+        except Exception:
+            # Last-resort guard: log with the traceback rather than let the loop die silently.
+            logger.exception("Error in control loop")
             self._connected = False
             self._notify_status()
 
