@@ -10,8 +10,8 @@ from serial.tools.list_ports_windows import comports
 
 from .entities.dimmer import Dimmer
 from .sensors import SensorProvider, create_provider
-from .util import env
-from .util.tools import MedianSmoother, calculate_dimmer_value, curve_to_ranges, ranges_to_curve
+from .util.config import CONFIG
+from .util.tools import MedianSmoother, calculate_dimmer_value, curve_to_ranges
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +33,9 @@ class SpeedController:
 
     def __init__(self, sensor_provider: SensorProvider | None = None):
         self.device = Dimmer()
-        self.sensors = sensor_provider or create_provider(env.SENSOR_PROVIDER)
-        self._mode = Mode.AUTO
-        self._manual_speed = 0
+        self._sensors = sensor_provider or create_provider(CONFIG.sensors.provider)
+        self._mode = Mode(CONFIG.control.mode)  # validated on load, so this cannot raise here
+        self._manual_speed = CONFIG.control.manual_speed
         self._running = False
         self._loop_task: asyncio.Task | None = None
 
@@ -55,12 +55,13 @@ class SpeedController:
         self._last_sent: int | None = None
         self._ticks_since_resync = 0
 
-        self._cpu_smoother = MedianSmoother(env.TEMP_WINDOW)
-        self._gpu_smoother = MedianSmoother(env.TEMP_WINDOW)
+        self._temp_window = max(1, int(CONFIG.control.temp_window))
+        self._cpu_smoother = MedianSmoother(self._temp_window)
+        self._gpu_smoother = MedianSmoother(self._temp_window)
 
         # The curve is editable at runtime from the GUI. Configuration only seeds it.
-        self._ranges = env.TEMP_RANGES
-        self._curve = ranges_to_curve(env.TEMP_RANGES)
+        self._curve = [(float(temperature), float(percent)) for temperature, percent in CONFIG.control.curve]
+        self._ranges = curve_to_ranges(self._curve)
 
     @property
     def mode(self) -> Mode:
@@ -69,6 +70,9 @@ class SpeedController:
 
     @mode.setter
     def mode(self, value: Mode):
+        # Kept in the configuration as well, so Save writes it and the next run starts in the mode
+        # this one was left in.
+        CONFIG.control.mode = value.value
         if self._mode != value:
             self._mode = value
             logger.info(f"Mode changed to {value.name}")
@@ -81,6 +85,9 @@ class SpeedController:
     @manual_speed.setter
     def manual_speed(self, value: int):
         self._manual_speed = max(0, min(100, int(value)))
+        # Kept in the configuration too, so Save writes it and the next run starts where this one
+        # left off rather than at 0 %.
+        CONFIG.control.manual_speed = self._manual_speed
         logger.debug(f"Manual speed set to {self._manual_speed}")
 
     @property
@@ -128,6 +135,52 @@ class SpeedController:
         self._ranges = curve_to_ranges(ordered)
         self._curve = ordered
         logger.debug(f"Curve replaced: {ordered}")
+
+    @property
+    def sensors(self) -> SensorProvider:
+        """The temperature source in use."""
+        return self._sensors
+
+    @sensors.setter
+    def sensors(self, provider):
+        """Swap the temperature source, by name or by instance.
+
+        Labels differ between sources, so readings taken through the old one say nothing about the
+        new one: the smoothers start over. Published with a single assignment, because the control
+        loop reads this attribute from the asyncio thread while the GUI writes it from Tk.
+        """
+        provider = create_provider(provider) if isinstance(provider, str) else provider
+        if provider is self._sensors:
+            return
+
+        self._sensors = provider
+        self._reset_smoothers()
+        logger.info(f"Sensor source is now {getattr(provider, 'name', type(provider).__name__)}")
+
+    @property
+    def temp_window(self) -> int:
+        """Number of readings the rolling median covers."""
+        return self._temp_window
+
+    @temp_window.setter
+    def temp_window(self, size: int):
+        """Resize the smoothing window, which means replacing the smoothers."""
+        size = max(1, int(size))
+        if size == self._temp_window:
+            return
+
+        self._temp_window = size
+        self._reset_smoothers()
+        logger.debug(f"Smoothing window is now {size}")
+
+    def _reset_smoothers(self):
+        """Fresh smoothers sized to the current window.
+
+        Both are replaced one after the other rather than atomically: a tick landing in between
+        sees one new and one old smoother, which costs nothing because they are independent.
+        """
+        self._cpu_smoother = MedianSmoother(self._temp_window)
+        self._gpu_smoother = MedianSmoother(self._temp_window)
 
     @property
     def port(self) -> str | None:
@@ -205,7 +258,7 @@ class SpeedController:
         value yet, and every RESYNC_EVERY ticks so an external change (Tasmota web UI, a reboot) is
         still picked up.
         """
-        due = env.RESYNC_EVERY and self._ticks_since_resync >= env.RESYNC_EVERY
+        due = CONFIG.control.resync_every and self._ticks_since_resync >= CONFIG.control.resync_every
         if self._last_sent is not None and not due:
             self._ticks_since_resync += 1
             return self._last_sent
@@ -216,7 +269,7 @@ class SpeedController:
             return self._last_sent
 
         if self._last_sent is not None and reported != self._last_sent:
-            logger.warning(f"{env.PWM_COMMAND} changed outside this app: {self._last_sent} -> {reported}")
+            logger.warning(f"{CONFIG.device.pwm_command} changed outside this app: {self._last_sent} -> {reported}")
 
         self._last_sent = reported
         return reported
@@ -237,11 +290,11 @@ class SpeedController:
         coms: list[ListPortInfo] = comports()
         coms_match = []
 
-        if env.DEVICE_NAME:
-            coms_match = [_ for _ in coms if env.DEVICE_NAME in _.description]
+        if CONFIG.device.name:
+            coms_match = [_ for _ in coms if CONFIG.device.name in _.description]
 
-        if env.DEVICE_SERIAL:
-            coms_match = [_ for _ in coms if _.serial_number and env.DEVICE_SERIAL in _.serial_number] or coms_match
+        if CONFIG.device.serial:
+            coms_match = [_ for _ in coms if _.serial_number and CONFIG.device.serial in _.serial_number] or coms_match
 
         if coms_match:
             com = coms_match[0]
@@ -252,6 +305,26 @@ class SpeedController:
         self._connected = self.device.connected
         self._notify_status()
         return self._connected
+
+    async def reconnect(self) -> bool:
+        """Close the port and open it again from the current device configuration.
+
+        Port, baudrate, timeout and the PWM command name are read when the Dimmer is built, so a
+        change to any of them needs a new device rather than a new connection. This runs on the
+        asyncio thread: call it from the GUI with asyncio.run_coroutine_threadsafe.
+        """
+        if self.device.connected:
+            await self.device.disconnect()
+
+        self.device = Dimmer()
+        # Whatever the previous device reported says nothing about this one.
+        self._last_sent = None
+        self._ticks_since_resync = 0
+        self._connected = False
+        self._notify_status()
+
+        logger.info(f"Reconnecting to {self.device.port} at {self.device.baudrate} baud")
+        return await self._connect()
 
     async def _control_loop(self):
         """Main control loop."""
@@ -269,11 +342,11 @@ class SpeedController:
                         sensors = await asyncio.to_thread(self.sensors.get_temperatures)
                     except Exception as e:  # noqa: BLE001 -- WMI/COM raise arbitrary types; never kill the loop
                         logger.error(f"Error reading sensors: {e}")
-                        await asyncio.sleep(env.DELAY)
+                        await asyncio.sleep(CONFIG.control.delay)
                         continue
 
-                    cpu_temps = [v for k, v in sensors.items() if env.CPU_SENSOR_FILTER in k]
-                    gpu_temps = [v for k, v in sensors.items() if env.GPU_SENSOR_FILTER in k]
+                    cpu_temps = [v for k, v in sensors.items() if CONFIG.sensors.cpu_filter in k]
+                    gpu_temps = [v for k, v in sensors.items() if CONFIG.sensors.gpu_filter in k]
 
                     # Round rather than truncate: sources such as the LibreHardwareMonitor web
                     # server report fractions, and int() would bias every reading downwards.
@@ -284,7 +357,7 @@ class SpeedController:
                     if (raw_cpu, raw_gpu) != (self._cpu_temp, self._gpu_temp):
                         logger.debug(
                             f"Smoothed CPU {raw_cpu} -> {self._cpu_temp}, GPU {raw_gpu} -> {self._gpu_temp}"
-                            f" (median of {env.TEMP_WINDOW})"
+                            f" (median of {self._temp_window})"
                         )
                     self._notify_temps()
 
@@ -298,11 +371,14 @@ class SpeedController:
                         new_value = max(cpu_dimmer, gpu_dimmer)
 
                         # Apply step limits
-                        if current_dimmer is not None and env.MAX_STEP:
-                            new_value = max(new_value, current_dimmer - env.MAX_STEP)
+                        if current_dimmer is not None and CONFIG.control.max_step:
+                            new_value = max(new_value, current_dimmer - CONFIG.control.max_step)
 
                         # Apply minimum change threshold
-                        if current_dimmer is not None and abs(current_dimmer - new_value) < env.IGNORE_LESS_THAN:
+                        if (
+                            current_dimmer is not None
+                            and abs(current_dimmer - new_value) < CONFIG.control.ignore_less_than
+                        ):
                             new_value = current_dimmer
                     else:
                         # Manual mode
@@ -312,7 +388,7 @@ class SpeedController:
                     if current_dimmer != new_value:
                         logger.info(
                             f"CPU: {self._cpu_temp}, GPU: {self._gpu_temp}. "
-                            f"{env.PWM_COMMAND}: {current_dimmer} -> {new_value}"
+                            f"{CONFIG.device.pwm_command}: {current_dimmer} -> {new_value}"
                         )
                         await self._set_fan_speed(new_value)
                     elif current_dimmer is not None:
@@ -325,7 +401,7 @@ class SpeedController:
                     self._ticks_since_resync = 0
                     self._notify_status()
 
-                await asyncio.sleep(env.DELAY)
+                await asyncio.sleep(CONFIG.control.delay)
 
         except asyncio.CancelledError:
             logger.debug("Control loop cancelled")

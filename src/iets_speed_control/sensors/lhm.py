@@ -16,6 +16,7 @@ class LibreHardwareMonitorProvider:
     """Reads Sensor instances of type Temperature from the LibreHardwareMonitor WMI namespace."""
 
     name = "lhm"
+    label = "LibreHardwareMonitor (WMI)"
     # OpenHardwareMonitor exposes an identical Sensor schema, so it works as a fallback.
     WMI_NAMESPACES = ("root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor")
     SENSOR_TYPE = "Temperature"

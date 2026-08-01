@@ -76,7 +76,9 @@ def server():
     httpd.expected_authorization = f"Basic {token}"
     httpd.seen_authorization = None
 
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    # The default half-second poll interval is also how long shutdown() waits, which was half a
+    # second of teardown per test in this file.
+    thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
     thread.start()
     try:
         yield httpd
@@ -92,10 +94,10 @@ def url(server) -> str:
     return f"http://{host}:{port}/data.json"
 
 
-def provider(url, **credentials) -> LibreHardwareMonitorWebProvider:
+def provider(url, timeout: float = 5.0, **credentials) -> LibreHardwareMonitorWebProvider:
     credentials.setdefault("username", "")
     credentials.setdefault("password", "")
-    return LibreHardwareMonitorWebProvider(url=url, timeout=5.0, **credentials)
+    return LibreHardwareMonitorWebProvider(url=url, timeout=timeout, **credentials)
 
 
 def test_correct_credentials_return_temperatures(url):
@@ -127,8 +129,9 @@ def test_missing_credentials_send_no_authorization_header(url, server):
 
 
 def test_unreachable_server_is_reported_without_raising():
-    # Port 1 is reserved and never served, so this fails to connect rather than timing out.
-    temperatures = provider("http://127.0.0.1:1/data.json").get_temperatures()
+    # Port 1 is reserved and never served. The short timeout is what keeps this quick: Windows spends
+    # about two seconds on the connection attempt before giving up on its own.
+    temperatures = provider("http://127.0.0.1:1/data.json", timeout=0.2).get_temperatures()
 
     assert temperatures == {}
 

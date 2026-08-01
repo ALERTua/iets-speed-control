@@ -7,11 +7,11 @@ requires-python = "==3.14.*"
 dependencies = [
     "aioserial",
     "pyserial",
-    "python-dotenv",
     "wmi",
     "pystray",
     "customtkinter",
     "Pillow",
+    "ruamel-yaml",
 ]
 
 [dependency-groups]
@@ -20,6 +20,7 @@ dev = [
     "pyinstaller",
     "pytest",
     "pytest-asyncio",
+    "pytest-xdist>=3.8.0",
     "ruff",
     "rust-just",
 ]
@@ -43,4 +44,5 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 markers = [
     "e2e: marks tests as end-to-end tests that require real network access (deselect with '-m \"not e2e\"')",
+    "gui: needs the shared Tk root; applied automatically, and kept out of parallel runs",
 ]

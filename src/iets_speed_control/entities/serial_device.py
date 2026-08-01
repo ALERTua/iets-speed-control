@@ -6,7 +6,7 @@ import re
 import aioserial
 from serial.serialutil import SerialException
 
-from ..util import env
+from ..util.config import CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -25,15 +25,13 @@ def require_connection(func):
 
 
 class SerialDevice:
-    def __init__(
-        self,
-        port=env.DEFAULT_PORT,
-        baudrate=env.SERIAL_BAUDRATE,
-        timeout=env.SERIAL_TIMEOUT,
-    ):
-        self.port = port
-        self.baudrate = baudrate
-        self.timeout = timeout
+    def __init__(self, port=None, baudrate=None, timeout=None):
+        # None means "whatever the configuration says now". Defaulting to CONFIG.device.* in the
+        # signature would freeze the values at import time, so a device rebuilt after the user
+        # edited the port in the settings panel would still open the old one.
+        self.port = CONFIG.device.port if port is None else port
+        self.baudrate = CONFIG.device.baudrate if baudrate is None else baudrate
+        self.timeout = CONFIG.device.timeout if timeout is None else timeout
         self.serial: aioserial.AioSerial | None = None
 
     async def __aenter__(self):
@@ -115,21 +113,41 @@ class SerialDevice:
 
         return output
 
-    async def read_command_result(self):
-        results = await self._read_results()
-        if not results:
+    def discard_input(self):
+        """Throw away anything already waiting to be read.
+
+        The device answers a set as well as a query, and those replies are never read at the time, so
+        they queue up in the driver's buffer. Whatever is in there predates the query about to be
+        sent, and returning it made this app read back values it had written itself seconds earlier --
+        which the controller then reported as someone changing the dimmer from outside.
+        """
+        if not self.serial:
             return
 
-        return results[0]
+        try:
+            self.serial.reset_input_buffer()
+        except OSError as e:
+            logger.debug(f"Could not clear the input buffer: {e}")
 
     async def read_field_value(self, field_name) -> int | None:
+        """Query one field and return its value, or None when the device does not answer."""
+        self.discard_input()
         await self.send_command(field_name)
-        result = await self.read_command_result()
-        return result.get(field_name, None) if result else None
+
+        # Last match rather than first: a device that echoes the command before answering it puts the
+        # answer at the end.
+        for result in reversed(await self._read_results()):
+            if field_name in result:
+                return result[field_name]
+
+        return None
 
     async def set_field_value(self, field_name, value):
+        """Set one field. The reply is left in the buffer and dropped by the next read.
+
+        Reading it here would cost a read timeout on every single tick, and nothing needs it.
+        """
         await self.send_command(f"{field_name} {value}")
-        # await asyncio.sleep(0.1)
 
 
 async def main():

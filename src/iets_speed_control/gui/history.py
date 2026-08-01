@@ -33,9 +33,14 @@ class TemperatureHistory(ctk.CTkFrame):
     # --- data -----------------------------------------------------------------------------
 
     def add(self, cpu, gpu):
+        """Record one reading. Drawing is the caller's business.
+
+        A drain can replay a dozen readings into one visible frame, and redrawing per reading meant
+        a dozen full canvas rebuilds to show the last of them. The caller redraws once when it is
+        done adding.
+        """
         self.samples.append((self._clock(), float(cpu), float(gpu)))
         self._prune()
-        self.redraw()
 
     def _prune(self):
         cutoff = self._clock() - self.window_seconds

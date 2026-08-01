@@ -1,5 +1,3 @@
-# do not import env here
-
 import statistics
 from collections import deque
 from itertools import pairwise
@@ -34,14 +32,6 @@ class MedianSmoother:
 CURVE_TEMP_CEILING = 200  # upper bound of the trailing shelf; above it the fallback clamps anyway
 
 
-def normalize_ranges(temperature_ranges):
-    """Accept either the configured string form or an already structured sequence of ranges."""
-    if isinstance(temperature_ranges, str):
-        # Legacy config format; replaced by structured YAML in plan 06.
-        temperature_ranges = eval(temperature_ranges)
-    return tuple(tuple(r) for r in temperature_ranges)
-
-
 def curve_to_ranges(points):
     """Turn curve points [(temp, percent), ...] into the range tuples the controller evaluates.
 
@@ -69,30 +59,8 @@ def curve_to_ranges(points):
     return tuple(ranges)
 
 
-def ranges_to_curve(temperature_ranges):
-    """Derive curve points from range tuples, for seeding the editor from existing configuration.
-
-    Lossy on purpose: a range whose endpoints disagree with its neighbour's collapses to a single
-    point. It is a starting shape for the editor, not a round-trip guarantee.
-    """
-    ranges = normalize_ranges(temperature_ranges)
-    if not ranges:
-        return []
-
-    points = {}
-    for temp_down, temp_up, dimmer_down, dimmer_up in ranges:
-        points[float(temp_down)] = float(dimmer_down)
-        points[float(temp_up)] = float(dimmer_up)
-
-    # Drop the artificial shelves: a leading 0 C point and the ceiling carry no user intent.
-    points.pop(0.0, None)
-    points.pop(float(CURVE_TEMP_CEILING), None)
-
-    return sorted(points.items())
-
-
 def calculate_dimmer_value(temperature, temperature_ranges):
-    temperature_ranges = normalize_ranges(temperature_ranges)
+    temperature_ranges = tuple(tuple(r) for r in temperature_ranges)
     output = None
     temps_down = set()
     temps_up = set()
@@ -126,19 +94,3 @@ def calculate_dimmer_value(temperature, temperature_ranges):
     # Always an int: the PWM value goes onto the wire as "<command> <value>", and curve points are
     # floats, so without this the device would receive "Dimmer 49.0".
     return round(output)
-
-
-def strtobool(val):  # distutil strtobool
-    """Convert a string representation of truth to true (1) or false (0).
-
-    True values are 'y', 'yes', 't', 'true', 'on', and '1'; false values
-    are 'n', 'no', 'f', 'false', 'off', and '0'.  Raises ValueError if
-    'val' is anything else.
-    """
-    val = val.lower()
-    if val in ("y", "yes", "t", "true", "on", "1"):
-        return 1
-    elif val in ("n", "no", "f", "false", "off", "0"):
-        return 0
-    else:
-        raise ValueError(f"invalid truth value {val!r}")

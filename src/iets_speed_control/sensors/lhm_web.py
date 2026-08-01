@@ -16,7 +16,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from ..util import env
+from ..util.config import CONFIG
 from .base import to_temperature
 
 logger = logging.getLogger(__name__)
@@ -29,6 +29,7 @@ class LibreHardwareMonitorWebProvider:
     """Reads /data.json from the LibreHardwareMonitor remote web server."""
 
     name = "lhm-web"
+    label = "LibreHardwareMonitor (web server)"
     SENSOR_TYPE = "Temperature"
 
     def __init__(
@@ -38,10 +39,29 @@ class LibreHardwareMonitorWebProvider:
         username: str | None = None,
         password: str | None = None,
     ):
-        self.url = url or env.LHM_WEB_URL
-        self.timeout = timeout if timeout is not None else env.LHM_WEB_TIMEOUT
-        self.username = env.LHM_WEB_USERNAME if username is None else username
-        self.password = env.LHM_WEB_PASSWORD if password is None else password
+        # Arguments are kept as overrides rather than resolved once. Everything not overridden is
+        # read from the configuration at request time, so editing the URL or the credentials in the
+        # settings panel takes effect on the next reading instead of needing a new provider.
+        self._url = url
+        self._timeout = timeout
+        self._username = username
+        self._password = password
+
+    @property
+    def url(self) -> str:
+        return self._url or CONFIG.sensors.lhm_web.url
+
+    @property
+    def timeout(self) -> float:
+        return CONFIG.sensors.lhm_web.timeout if self._timeout is None else self._timeout
+
+    @property
+    def username(self) -> str:
+        return CONFIG.sensors.lhm_web.username if self._username is None else self._username
+
+    @property
+    def password(self) -> str:
+        return CONFIG.sensors.lhm_web.password if self._password is None else self._password
 
     def get_temperatures(self) -> dict[str, float]:
         output: dict[str, float] = {}
@@ -52,7 +72,7 @@ class LibreHardwareMonitorWebProvider:
             if e.code == 401:
                 logger.error(
                     f"LibreHardwareMonitor at {redact(self.url)} rejected the credentials."
-                    " Set LHM_WEB_USERNAME and LHM_WEB_PASSWORD to match"
+                    " Set sensors.lhm_web.username and sensors.lhm_web.password to match"
                     " Options -> Remote Web Server -> Authentication."
                 )
             else:

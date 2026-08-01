@@ -6,9 +6,13 @@ from iets_speed_control.gui.nav import NavigationRail, NavItem
 from iets_speed_control.gui.theme import RAIL_COLLAPSED_WIDTH, RAIL_EXPANDED_WIDTH
 
 
-@pytest.fixture
-def app(tk_root):
-    """A GUIApp wired to the shared test root, with no tray and no asyncio thread."""
+@pytest.fixture(scope="module")
+def shell(tk_root):
+    """A GUIApp wired to the shared test root, built once for the module.
+
+    Building the rail, the status panel and the settings view costs about a quarter of a second and
+    tearing them down four times that, so it is done once and reset per test by `app`.
+    """
     from iets_speed_control.controller import SpeedController
     from iets_speed_control.gui.app import NAV_ITEMS, GUIApp
     from iets_speed_control.gui.settings import SettingsView
@@ -47,6 +51,24 @@ def app(tk_root):
         instance.rail.destroy()
         content.destroy()
         tk_root.update()
+
+
+@pytest.fixture
+def app(shell, tk_root):
+    """The shared shell, back on Home with the default timeline: what a fresh one would look like."""
+    from iets_speed_control.controller import Mode
+    from iets_speed_control.gui.theme import HISTORY_WINDOW_SECONDS
+
+    shell.controller.mode = Mode.AUTO
+    shell.settings_view.pack_forget()
+    shell.status_panel.pack(fill="both", expand=True)
+    shell.status_panel.sync_mode()
+    shell.view = "home"
+    shell.rail.collapsed = False
+    shell.rail.select("home", notify=False)
+    shell._on_history_window(HISTORY_WINDOW_SECONDS)
+    tk_root.update()
+    return shell
 
 
 @pytest.fixture
@@ -141,6 +163,43 @@ def test_select_can_stay_silent(rail):
 
     assert rail.chosen == []
     assert rail.selected == "home"
+
+
+# --- the exit button ------------------------------------------------------------------------------
+
+
+def test_the_exit_button_sits_at_the_bottom(rail):
+    """Destructive, so it belongs as far from the destinations as the rail allows."""
+    assert rail.exit_button.winfo_manager() == "pack"
+    assert rail.exit_button.pack_info()["side"] == "bottom"
+
+
+def test_the_exit_button_calls_back(tk_root):
+    quits = []
+    items = [NavItem("home", "Home", "H")]
+    widget = NavigationRail(tk_root, items, on_select=lambda key: None, on_exit=lambda: quits.append(1))
+    try:
+        widget.exit_button.cget("command")()
+
+        assert quits == [1]
+    finally:
+        widget.destroy()
+        tk_root.update()
+
+
+def test_the_exit_button_is_harmless_without_a_handler(rail):
+    """The rail is built before the shell wires anything up, so a missing handler must not raise."""
+    rail.exit_button.cget("command")()
+
+
+def test_the_exit_button_collapses_to_its_icon(rail):
+    from iets_speed_control.gui.nav import EXIT_ICON
+
+    assert "Exit" in rail.exit_button.cget("text")
+
+    rail.toggle()
+
+    assert rail.exit_button.cget("text") == EXIT_ICON
 
 
 # --- the two destinations -----------------------------------------------------------------------

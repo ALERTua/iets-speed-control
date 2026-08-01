@@ -9,7 +9,7 @@ import asyncio
 import pytest
 
 from iets_speed_control.controller import Mode, SpeedController
-from iets_speed_control.util import env
+from iets_speed_control.util.config import CONFIG
 from iets_speed_control.util.tools import MedianSmoother
 
 
@@ -57,13 +57,13 @@ class ScriptedSensors:
 @pytest.fixture
 def controller_env(monkeypatch):
     """Deterministic, fast control-loop settings."""
-    monkeypatch.setattr(env, "DELAY", 0.01)
-    monkeypatch.setattr(env, "CPU_SENSOR_FILTER", "CPU")
-    monkeypatch.setattr(env, "GPU_SENSOR_FILTER", "GPU")
-    monkeypatch.setattr(env, "MAX_STEP", 100)
-    monkeypatch.setattr(env, "IGNORE_LESS_THAN", 0)
-    # Two ranges, not one: a single range would eval() to a flat tuple of ints. Linear 0..100 C -> 0..50.
-    monkeypatch.setattr(env, "TEMP_RANGES", "(0, 100, 0, 50), (100, 200, 50, 100)")
+    monkeypatch.setattr(CONFIG.control, "delay", 0.01)
+    monkeypatch.setattr(CONFIG.sensors, "cpu_filter", "CPU")
+    monkeypatch.setattr(CONFIG.sensors, "gpu_filter", "GPU")
+    monkeypatch.setattr(CONFIG.control, "max_step", 100)
+    monkeypatch.setattr(CONFIG.control, "ignore_less_than", 0)
+    # Linear 0..100 C -> 0..50 %, so a temperature maps to a predictable percentage.
+    monkeypatch.setattr(CONFIG.control, "curve", [[0, 0], [100, 50]])
 
 
 async def run_loop(controller, ticks: int, delay: float = 0.01):
@@ -118,8 +118,8 @@ def test_smoother_reset_drops_history():
 
 async def test_dimmer_is_not_re_read_every_tick(controller_env, monkeypatch):
     """The cached last-written value replaces a serial round-trip on every tick."""
-    monkeypatch.setattr(env, "RESYNC_EVERY", 0)
-    monkeypatch.setattr(env, "TEMP_WINDOW", 1)
+    monkeypatch.setattr(CONFIG.control, "resync_every", 0)
+    monkeypatch.setattr(CONFIG.control, "temp_window", 1)
 
     controller = SpeedController(sensor_provider=ScriptedSensors([70]))
     device = FakeDevice(0)
@@ -131,8 +131,8 @@ async def test_dimmer_is_not_re_read_every_tick(controller_env, monkeypatch):
 
 
 async def test_dimmer_is_re_read_on_the_resync_tick(controller_env, monkeypatch):
-    monkeypatch.setattr(env, "RESYNC_EVERY", 3)
-    monkeypatch.setattr(env, "TEMP_WINDOW", 1)
+    monkeypatch.setattr(CONFIG.control, "resync_every", 3)
+    monkeypatch.setattr(CONFIG.control, "temp_window", 1)
 
     controller = SpeedController(sensor_provider=ScriptedSensors([70]))
     device = FakeDevice(0)
@@ -145,9 +145,9 @@ async def test_dimmer_is_re_read_on_the_resync_tick(controller_env, monkeypatch)
 
 async def test_external_change_is_picked_up_and_reported(controller_env, monkeypatch, caplog):
     """Someone moving the dimmer via the Tasmota UI must not be silently overwritten."""
-    monkeypatch.setattr(env, "RESYNC_EVERY", 2)
-    monkeypatch.setattr(env, "TEMP_WINDOW", 1)
-    monkeypatch.setattr(env, "MAX_STEP", 0)
+    monkeypatch.setattr(CONFIG.control, "resync_every", 2)
+    monkeypatch.setattr(CONFIG.control, "temp_window", 1)
+    monkeypatch.setattr(CONFIG.control, "max_step", 0)
 
     controller = SpeedController(sensor_provider=ScriptedSensors([70]))
     device = FakeDevice(0)
@@ -165,8 +165,8 @@ async def test_external_change_is_picked_up_and_reported(controller_env, monkeyp
 
 
 async def test_reconnect_forces_a_fresh_read(controller_env, monkeypatch):
-    monkeypatch.setattr(env, "RESYNC_EVERY", 0)
-    monkeypatch.setattr(env, "TEMP_WINDOW", 1)
+    monkeypatch.setattr(CONFIG.control, "resync_every", 0)
+    monkeypatch.setattr(CONFIG.control, "temp_window", 1)
 
     controller = SpeedController(sensor_provider=ScriptedSensors([70]))
     device = FakeDevice(0)
@@ -190,8 +190,8 @@ async def test_reconnect_forces_a_fresh_read(controller_env, monkeypatch):
 
 async def test_a_single_spike_does_not_move_the_fan(controller_env, monkeypatch):
     """60 C steady with one 95 C blip: the median swallows it, so no new value is written."""
-    monkeypatch.setattr(env, "RESYNC_EVERY", 0)
-    monkeypatch.setattr(env, "TEMP_WINDOW", 5)
+    monkeypatch.setattr(CONFIG.control, "resync_every", 0)
+    monkeypatch.setattr(CONFIG.control, "temp_window", 5)
 
     controller = SpeedController(sensor_provider=ScriptedSensors([60, 60, 60, 60, 60, 95, 60, 60, 60]))
     device = FakeDevice(30)
@@ -204,8 +204,8 @@ async def test_a_single_spike_does_not_move_the_fan(controller_env, monkeypatch)
 
 async def test_fractional_readings_are_rounded_not_truncated(controller_env, monkeypatch):
     """LibreHardwareMonitor reports values like 60.6; int() would report 60."""
-    monkeypatch.setattr(env, "RESYNC_EVERY", 0)
-    monkeypatch.setattr(env, "TEMP_WINDOW", 1)
+    monkeypatch.setattr(CONFIG.control, "resync_every", 0)
+    monkeypatch.setattr(CONFIG.control, "temp_window", 1)
 
     controller = SpeedController(sensor_provider=ScriptedSensors([60.6]))
     controller.device = FakeDevice(0)

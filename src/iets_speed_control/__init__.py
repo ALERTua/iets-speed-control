@@ -1,1 +1,1 @@
-from .util import env  # noqa: F401
+from .util.config import CONFIG  # noqa: F401

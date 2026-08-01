@@ -76,20 +76,19 @@ def test_no_module_logs_through_the_root_logger():
 
 
 @pytest.mark.parametrize(
-    ("verbose", "log_level", "expected"),
+    ("log_level", "expected"),
     [
-        (0, "", logging.INFO),
-        (1, "", logging.DEBUG),
-        (0, "WARNING", logging.WARNING),
-        (1, "warning", logging.WARNING),  # LOG_LEVEL wins over VERBOSE, case-insensitively
-        (0, "nonsense", logging.INFO),  # unknown values fall back instead of crashing
+        ("INFO", logging.INFO),
+        ("DEBUG", logging.DEBUG),
+        ("WARNING", logging.WARNING),
+        ("warning", logging.WARNING),  # matched case-insensitively
+        ("nonsense", logging.INFO),  # unknown values fall back instead of crashing
     ],
 )
-def test_level_resolution(monkeypatch, verbose, log_level, expected):
-    from iets_speed_control.util import env
+def test_level_resolution(monkeypatch, log_level, expected):
+    from iets_speed_control.util.config import CONFIG
 
-    monkeypatch.setattr(env, "VERBOSE", verbose)
-    monkeypatch.setattr(env, "LOG_LEVEL", log_level)
+    monkeypatch.setattr(CONFIG.logging, "level", log_level)
 
     resolved, complaint = logger_module.resolve_level()
 
@@ -97,12 +96,11 @@ def test_level_resolution(monkeypatch, verbose, log_level, expected):
     assert (complaint is not None) == (log_level == "nonsense")
 
 
-def test_verbose_zero_does_not_enable_debug(tmp_path, logging_state, monkeypatch):
-    """Regression: the old setup treated the string "0" as truthy and always ran at DEBUG."""
-    from iets_speed_control.util import env
+def test_default_level_is_info_not_debug(tmp_path, logging_state, monkeypatch):
+    """Regression: the old VERBOSE handling treated the string "0" as truthy and forced DEBUG."""
+    from iets_speed_control.util.config import CONFIG
 
-    monkeypatch.setattr(env, "VERBOSE", 0)
-    monkeypatch.setattr(env, "LOG_LEVEL", "")
+    monkeypatch.setattr(CONFIG.logging, "level", "INFO")
 
     logger_module.configure_logging(log_file=tmp_path / "log.txt", force=True)
 
@@ -170,8 +168,41 @@ def test_records_propagate_to_root_handlers(tmp_path, logging_state):
     assert "propagated" in captured
 
 
+def test_no_log_file_is_written_by_default(tmp_path, logging_state, monkeypatch):
+    """Nothing lands on the user's disk unless they ask for it: logging.file is opt-in."""
+    from iets_speed_control.util.config import CONFIG
+
+    monkeypatch.setattr(CONFIG.logging, "file", None)
+    suggested = tmp_path / "logs" / "iets-speed-control.log"
+    monkeypatch.setattr(logger_module, "default_log_file", lambda: suggested)
+
+    logger_module.configure_logging(level="INFO", force=True)
+    logging.getLogger(f"{logger_module.PACKAGE_LOGGER}.test").info("not written anywhere")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+
+    assert not any(isinstance(handler, logging.FileHandler) for handler in logging.getLogger().handlers)
+    assert not suggested.exists(), "not even the folder should be created"
+    assert not suggested.parent.exists()
+
+
+def test_a_configured_path_turns_the_file_on(tmp_path, logging_state, monkeypatch):
+    from iets_speed_control.util.config import CONFIG
+
+    target = tmp_path / "asked" / "for.log"
+    monkeypatch.setattr(CONFIG.logging, "file", str(target))
+
+    logger_module.configure_logging(level="INFO", force=True)
+    logging.getLogger(f"{logger_module.PACKAGE_LOGGER}.test").info("asked for it")
+    for handler in logging.getLogger().handlers:
+        handler.flush()
+
+    assert target.exists()
+    assert "asked for it" in target.read_text(encoding="utf-8")
+
+
 def test_writes_to_the_log_file(tmp_path, logging_state):
-    """The GUI has no console, so the file handler is the only sink that must always work."""
+    """An explicit path still works: this is the entrypoint's --log-file argument."""
     target = tmp_path / "nested" / "log.txt"
 
     logger_module.configure_logging(level="INFO", log_file=target, force=True)

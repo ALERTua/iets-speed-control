@@ -12,7 +12,8 @@ logger = logging.getLogger(__name__)
 class Aida64Provider:
     """Reads AIDA64_SensorValues from the root\\WMI namespace."""
 
-    name = "aida64"
+    name = "aida64"  # the code name: what goes in the configuration file
+    label = "AIDA64"  # what a person reads in the settings panel
     WMI_NAMESPACE = "root\\WMI"
     TEMPERATURE_TYPE = "T"  # AIDA64 marks sensor kind with a single letter: T/F/V/P/C/S
 

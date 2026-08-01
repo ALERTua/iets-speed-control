@@ -212,6 +212,40 @@ def test_drain_keeps_every_reading_for_the_graph(tk_root):
     panel.destroy()
 
 
+def test_a_drain_redraws_the_graph_once_for_the_whole_batch(tk_root):
+    """Redrawing per reading rebuilt the whole canvas a dozen times to show the last of them."""
+    from iets_speed_control.controller import SpeedController
+    from iets_speed_control.gui.status import StatusPanel
+
+    panel = StatusPanel(tk_root, SpeedController())
+    panel.stop_polling()
+    redraws = []
+    panel.history.redraw = lambda: redraws.append(1)
+
+    for cpu in (60, 62, 64, 66, 68):
+        panel._post("temps", (cpu, 50))
+    panel._drain()
+
+    assert len(panel.history.samples) == 5, "every reading still has to be recorded"
+    assert redraws == [1], f"one batch, one redraw; got {len(redraws)}"
+    panel.destroy()
+
+
+def test_a_drain_with_nothing_new_does_not_redraw(tk_root):
+    from iets_speed_control.controller import SpeedController
+    from iets_speed_control.gui.status import StatusPanel
+
+    panel = StatusPanel(tk_root, SpeedController())
+    panel.stop_polling()
+    redraws = []
+    panel.history.redraw = lambda: redraws.append(1)
+
+    panel._drain()
+
+    assert redraws == [], "an idle poll ten times a second must not repaint the graph"
+    panel.destroy()
+
+
 def test_queue_is_unbounded_enough_to_survive_a_stalled_ui(tk_root):
     from iets_speed_control.controller import SpeedController
     from iets_speed_control.gui.status import StatusPanel

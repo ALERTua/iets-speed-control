@@ -8,7 +8,9 @@ rail has no room for labels.
 
 import customtkinter as ctk
 
-from .theme import MUTED, NAV_ACTIVE, NAV_HOVER, RAIL_COLLAPSED_WIDTH, RAIL_EXPANDED_WIDTH, SIDEBAR
+from .theme import EXIT_HOVER, NAV_ACTIVE, NAV_HOVER, RAIL_COLLAPSED_WIDTH, RAIL_EXPANDED_WIDTH, SIDEBAR
+
+EXIT_ICON = "⏻"
 
 
 class NavItem:
@@ -24,10 +26,11 @@ class NavItem:
 class NavigationRail(ctk.CTkFrame):
     """Vertical navigation. Click an item to select it, the chevron to collapse or expand."""
 
-    def __init__(self, master, items: list[NavItem], on_select, collapsed: bool = False):
+    def __init__(self, master, items: list[NavItem], on_select, collapsed: bool = False, on_exit=None):
         super().__init__(master, fg_color=SIDEBAR, corner_radius=0, width=RAIL_EXPANDED_WIDTH)
         self.items = items
         self.on_select = on_select
+        self.on_exit = on_exit
         self.collapsed = collapsed
         self.selected: str | None = None
 
@@ -68,8 +71,23 @@ class NavigationRail(ctk.CTkFrame):
             )
             self.buttons[item.key] = button
 
-        self.hint_label = ctk.CTkLabel(self, text="", font=("", 10), text_color=MUTED)
-        self.hint_label.pack(side="bottom", pady=12)
+        # Packed against the bottom before any destination is, so it stays there whatever the list
+        # above does. Destructive, so it is kept as far from the destinations as the rail allows.
+        self.exit_button = ctk.CTkButton(
+            self,
+            text="",
+            anchor="w",
+            height=38,
+            corner_radius=8,
+            fg_color="transparent",
+            hover_color=EXIT_HOVER,
+            command=self._on_exit,
+        )
+        self.exit_button.pack(side="bottom", fill="x", padx=8, pady=(4, 10))
+
+    def _on_exit(self):
+        if self.on_exit:
+            self.on_exit()
 
     def _item(self, key) -> NavItem:
         return next(item for item in self.items if item.key == key)
@@ -114,7 +132,11 @@ class NavigationRail(ctk.CTkFrame):
             self.title_label.pack_forget()
         else:
             self.title_label.pack(side="left", padx=(8, 0))
-        self.hint_label.configure(text="" if self.collapsed else "Applied instantly")
+
+        self.exit_button.configure(
+            text=EXIT_ICON if self.collapsed else f" {EXIT_ICON}  Exit",
+            anchor="center" if self.collapsed else "w",
+        )
         self._relayout()
 
     # --- behaviour ------------------------------------------------------------------------

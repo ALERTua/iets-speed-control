@@ -21,6 +21,7 @@ from pathlib import Path
 PACKAGE_LOGGER = (__package__ or "iets_speed_control").rsplit(".", 1)[0]
 LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 THIRD_PARTY_LEVEL = "WARNING"
+DEFAULT_LEVEL = logging.INFO
 MAX_BYTES = 1024 * 1024
 BACKUP_COUNT = 3
 
@@ -28,28 +29,27 @@ _configured = False
 
 
 def default_log_file() -> Path:
-    """Per-user log location, so the GUI (which has no console) still leaves a trail."""
+    """The path offered when the user turns the log file on. Nothing is written unless they do."""
     base = os.getenv("LOCALAPPDATA") or Path.home()
     return Path(base) / "iets-speed-control" / "logs" / "iets-speed-control.log"
 
 
 def resolve_level(level: str | int | None = None) -> tuple[int, str | None]:
-    """Resolve the effective level, returning it plus a complaint about bad input, if any."""
-    from . import env
+    """Resolve the effective level, returning it plus a complaint about bad input, if any.
+
+    Configuration is validated on load, so a bad name here can only come from an explicit argument.
+    """
+    from .config import CONFIG
 
     if isinstance(level, int):
         return level, None
 
-    requested = level if level is not None else env.LOG_LEVEL
-    if requested:
-        named = logging.getLevelNamesMapping().get(str(requested).strip().upper())
-        if named is not None:
-            return named, None
+    requested = level if level is not None else CONFIG.logging.level
+    named = logging.getLevelNamesMapping().get(str(requested).strip().upper())
+    if named is not None:
+        return named, None
 
-        fallback = logging.DEBUG if env.VERBOSE else logging.INFO
-        return fallback, f"Ignoring unknown log level {requested!r}; using {logging.getLevelName(fallback)}."
-
-    return (logging.DEBUG if env.VERBOSE else logging.INFO), None
+    return DEFAULT_LEVEL, f"Ignoring unknown log level {requested!r}; using {logging.getLevelName(DEFAULT_LEVEL)}."
 
 
 def configure_logging(
@@ -62,12 +62,13 @@ def configure_logging(
     if _configured and not force:
         return
 
-    from . import env
+    from .config import CONFIG
 
     effective, complaint = resolve_level(level)
     handlers: dict[str, dict] = {}
 
-    # pythonw (the GUI) has no stderr at all, so do not install a handler that writes nowhere.
+    # Launched without a console (pythonw, or the GUI exe from a shortcut) there is no stderr at all,
+    # so do not install a handler that writes nowhere.
     if sys.stderr is not None:
         handlers["console"] = {
             "class": "logging.StreamHandler",
@@ -75,21 +76,27 @@ def configure_logging(
             "stream": "ext://sys.stderr",
         }
 
-    target = Path(log_file) if log_file else Path(env.LOG_FILE) if env.LOG_FILE else default_log_file()
+    # No file unless one is asked for. Writing a log nobody reads is a background side effect on the
+    # user's disk, so it is opt-in: set logging.file to a path. Launched from a shortcut the GUI has no
+    # console to print to either, so that combination leaves no trace at all -- the trade for not
+    # writing by default.
+    configured = log_file or CONFIG.logging.file
     file_error = None
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        handlers["file"] = {
-            "class": "logging.handlers.RotatingFileHandler",
-            "formatter": "standard",
-            "filename": str(target),
-            "maxBytes": MAX_BYTES,
-            "backupCount": BACKUP_COUNT,
-            "encoding": "utf-8",
-            "delay": True,
-        }
-    except OSError as e:
-        file_error = f"Cannot write the log file at {target}: {e}. Logging to the console only."
+    if configured:
+        target = Path(configured)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            handlers["file"] = {
+                "class": "logging.handlers.RotatingFileHandler",
+                "formatter": "standard",
+                "filename": str(target),
+                "maxBytes": MAX_BYTES,
+                "backupCount": BACKUP_COUNT,
+                "encoding": "utf-8",
+                "delay": True,
+            }
+        except OSError as e:
+            file_error = f"Cannot write the log file at {target}: {e}. Logging to the console only."
 
     logging.config.dictConfig(
         {
@@ -112,3 +119,13 @@ def configure_logging(
             logger.warning(problem)
 
     logger.debug(f"Logging at {logging.getLevelName(effective)}; handlers: {', '.join(handlers) or 'none'}")
+
+
+def reconfigure() -> None:
+    """Re-read the logging configuration and rebuild the handlers.
+
+    For the settings panel, where the user can change the level or the log file while the app runs.
+    Reconfiguring stays inside this module: callers ask for it by name rather than driving dictConfig
+    themselves, so global logging state still has exactly one owner.
+    """
+    configure_logging(force=True)

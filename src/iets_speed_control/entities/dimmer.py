@@ -1,17 +1,11 @@
-from ..util import env
+from ..util.config import CONFIG
 from .serial_device import SerialDevice
 
 
 class Dimmer(SerialDevice):
-    def __init__(
-        self,
-        port=env.DEFAULT_PORT,
-        baudrate=env.SERIAL_BAUDRATE,
-        timeout=env.SERIAL_TIMEOUT,
-        dimmer_command=env.PWM_COMMAND,
-    ):
+    def __init__(self, port=None, baudrate=None, timeout=None, dimmer_command=None):
         super().__init__(port=port, baudrate=baudrate, timeout=timeout)
-        self.dimmer_command = dimmer_command
+        self.dimmer_command = CONFIG.device.pwm_command if dimmer_command is None else dimmer_command
 
     async def read_dimmer_value(self) -> int | None:
         return await self.read_field_value(self.dimmer_command)
@@ -23,7 +17,7 @@ class Dimmer(SerialDevice):
 # async def _main():
 #     sd = Dimmer()
 #     await sd.connect()
-#     await sd.send_command(env.PWM_COMMAND)
+#     await sd.send_command(CONFIG.device.pwm_command)
 #     value = await sd._read_results()
 #
 #     value_set = await sd.set_dimmer_value(60)

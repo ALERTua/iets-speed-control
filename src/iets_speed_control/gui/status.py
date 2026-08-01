@@ -87,9 +87,12 @@ class StatusPanel(ctk.CTkFrame):
         except queue.Empty:
             pass
 
-        # Every reading matters for the graph, but only the last one for the labels.
+        # Every reading matters for the graph, but only the last one for the labels -- and one redraw
+        # is enough for the whole batch, however many readings the drain picked up.
         for cpu, gpu in temps:
             self.history.add(cpu, gpu)
+        if temps:
+            self.history.redraw()
 
         if "temps" in latest:
             cpu, gpu = latest["temps"]
@@ -123,11 +126,9 @@ class StatusPanel(ctk.CTkFrame):
             self.gui_app.update_tray_icon(connected)
 
     def _on_mode_change(self, value):
-        mode = Mode.AUTO if value == "Auto" else Mode.MANUAL
-        self.controller.mode = mode
-        if mode == Mode.MANUAL:
-            # Hold whatever the fan is doing now rather than jumping to a stale manual value.
-            self.controller.manual_speed = self.controller.current_speed
+        # The manual speed is whatever the user last set, kept in the configuration between runs.
+        # Seeding it from the current automatic speed here would overwrite that choice.
+        self.controller.mode = Mode.AUTO if value == "Auto" else Mode.MANUAL
 
     def sync_mode(self):
         """Reflect a mode change made elsewhere (settings window, tray)."""
