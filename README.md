@@ -34,7 +34,12 @@ Pick one with `sensors.provider` in the config file:
 | `lhm-web`          | LibreHardwareMonitor web server | Free; works where the WMI provider does not                                                         |
 
 Sensor labels differ between sources, so `sensors.cpu_filter` / `sensors.gpu_filter` may need adjusting when you
-switch. A filter that matches nothing yields 0 °C, which quietly drives the fan to its minimum.
+switch. A filter that matches nothing yields 0 °C, which quietly drives the fan to its minimum — Settings →
+Sensors shows how many sensors each filter currently matches.
+
+If the source itself stops answering — AIDA64 closed, LibreHardwareMonitor's web server unreachable — the tray
+icon turns red and Home says which source went quiet. The fan keeps running on the curve's floor until it
+comes back.
 
 #### AIDA64 Preparation
 

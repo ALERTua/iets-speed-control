@@ -111,19 +111,29 @@ class StatusPanel(ctk.CTkFrame):
 
     # --- widget updates -------------------------------------------------------------------
 
-    def _apply_status(self, connected: bool, running: bool):
-        if connected:
-            text = f"● Connected  {self.controller.port or ''}".rstrip()
-            colour = CPU_COLOR
-        else:
+    def _apply_status(self, connected: bool, running: bool, sensors_ok: bool = True):
+        """Two things can be wrong, and the difference matters when you are fixing it.
+
+        A dead serial link leaves the fan wherever it was; a silent temperature source is worse,
+        because the loop keeps running and drives the fan from 0 °C -- the curve's floor.
+        """
+        if not connected:
             text = "● Disconnected"
             colour = DISCONNECTED_COLOR
+        elif not sensors_ok:
+            source = getattr(self.controller.sensors, "name", "the sensor source")
+            text = f"● No temperatures from {source}"
+            colour = DISCONNECTED_COLOR
+        else:
+            text = f"● Connected  {self.controller.port or ''}".rstrip()
+            colour = CPU_COLOR
+
         if not running:
             text += "  (stopped)"
         self.status_label.configure(text=text, text_color=colour)
 
         if self.gui_app:
-            self.gui_app.update_tray_icon(connected)
+            self.gui_app.update_tray_icon(connected and sensors_ok)
 
     def _on_mode_change(self, value):
         # The manual speed is whatever the user last set, kept in the configuration between runs.

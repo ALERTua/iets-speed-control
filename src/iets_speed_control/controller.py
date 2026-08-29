@@ -49,6 +49,9 @@ class SpeedController:
         self._gpu_temp = 0
         self._current_speed = 0
         self._connected = False
+        # Whether the temperature source answered at all. A provider that cannot reach its app
+        # returns no readings rather than raising, which would otherwise look like a cold machine.
+        self._sensors_ok = True
 
         # The value we last wrote is the source of truth; the device is only re-read on
         # (re)connect and every RESYNC_EVERY ticks, to catch changes made outside this app.
@@ -99,6 +102,24 @@ class SpeedController:
     def connected(self) -> bool:
         """Whether the device is connected."""
         return self._connected
+
+    @property
+    def sensors_ok(self) -> bool:
+        """Whether the last read got any temperatures out of the source."""
+        return self._sensors_ok
+
+    def _set_sensors_ok(self, value: bool):
+        """Record whether the source answered, announcing only the transitions."""
+        if value == self._sensors_ok:
+            return
+
+        self._sensors_ok = value
+        name = getattr(self.sensors, "name", type(self.sensors).__name__)
+        if value:
+            logger.info(f"Temperature source {name} is answering again")
+        else:
+            logger.error(f"No temperatures from {name}: the fan is running on the curve's floor")
+        self._notify_status()
 
     @property
     def cpu_temp(self) -> int:
@@ -155,6 +176,7 @@ class SpeedController:
 
         self._sensors = provider
         self._reset_smoothers()
+        self._sensors_ok = True  # the new source has not failed yet; do not inherit the old verdict
         logger.info(f"Sensor source is now {getattr(provider, 'name', type(provider).__name__)}")
 
     @property
@@ -201,7 +223,7 @@ class SpeedController:
     def _notify_status(self):
         """Notify status change callback."""
         if self._on_status_change:
-            self._on_status_change(self._connected, self._running)
+            self._on_status_change(self._connected, self._running, self._sensors_ok)
 
     def _notify_temps(self):
         """Notify temperature change callback."""
@@ -342,8 +364,12 @@ class SpeedController:
                         sensors = await asyncio.to_thread(self.sensors.get_temperatures)
                     except Exception as e:  # noqa: BLE001 -- WMI/COM raise arbitrary types; never kill the loop
                         logger.error(f"Error reading sensors: {e}")
+                        self._set_sensors_ok(False)
                         await asyncio.sleep(CONFIG.control.delay)
                         continue
+
+                    # An empty result is how every provider reports "I cannot reach my app".
+                    self._set_sensors_ok(bool(sensors))
 
                     cpu_temps = [v for k, v in sensors.items() if CONFIG.sensors.cpu_filter in k]
                     gpu_temps = [v for k, v in sensors.items() if CONFIG.sensors.gpu_filter in k]

@@ -207,7 +207,7 @@ async def test_reconnect_works_when_nothing_was_connected(controller, fake_devic
 
 async def test_reconnect_reports_status(controller, fake_device):
     seen = []
-    controller.set_callbacks(on_status_change=lambda connected, running: seen.append(connected))
+    controller.set_callbacks(on_status_change=lambda connected, _running, _sensors_ok: seen.append(connected))
     controller.device = fake_device()
 
     await controller.reconnect()

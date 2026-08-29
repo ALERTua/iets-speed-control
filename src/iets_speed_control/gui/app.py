@@ -96,7 +96,7 @@ class GUIApp:
         self.icon_path = MEDIA_DIR / "icon.ico"
         self.icon_image = self._load_icon(self.icon_path)
         self.icon_red_image = self._load_icon(MEDIA_DIR / "icon-red.ico")
-        self._is_connected = True
+        self._is_healthy = True
 
     # --- icons ----------------------------------------------------------------------------
 
@@ -109,13 +109,14 @@ class GUIApp:
             logger.error(f"Failed to load icon: {e}")
             return Image.new("RGB", (64, 64), color="blue")
 
-    def update_tray_icon(self, connected: bool):
-        if connected == self._is_connected:
+    def update_tray_icon(self, healthy: bool):
+        """Red whenever the app cannot do its job: no device, or no temperatures to act on."""
+        if healthy == self._is_healthy:
             return
 
-        self._is_connected = connected
+        self._is_healthy = healthy
         if self.tray_icon:
-            self.tray_icon.icon = self.icon_image if connected else self.icon_red_image
+            self.tray_icon.icon = self.icon_image if healthy else self.icon_red_image
 
     # --- tray -----------------------------------------------------------------------------
 
