@@ -48,6 +48,10 @@ class FilterLine(ctk.CTkFrame):
         self.combo.set(re.escape(label))
         self._on_commit()
 
+    def clear(self):
+        """A line with no committed filter yet: no result, and no alarm."""
+        self.result.configure(text="", text_color=MUTED, font=("", 11))
+
     def show(self, value: float | None, label: str | None, hottest: bool):
         if value is None:
             self.result.configure(text=NO_MATCH, text_color=ERROR_COLOR, font=("", 11))
@@ -93,15 +97,19 @@ class FilterList(ctk.CTkFrame):
             line.combo.configure(values=self.suggestions)
 
     def show_selection(self, selection: Selection):
-        """Mark each line with its current match, and the line that holds the maximum."""
-        by_pattern = {match.pattern: match for match in selection.matches}
+        """Mark each line with its current match, and the line that holds the maximum.
+
+        Lines pair with the matches in order, the way they were committed. A line that is empty or being
+        edited, so its text is not next in the selection, shows nothing rather than a borrowed result.
+        """
+        pending = list(selection.matches)
         for line in self.lines:
-            match = by_pattern.get(line.pattern)
-            line.show(
-                match.value if match else None,
-                match.label if match else None,
-                hottest=selection.hottest is not None and match is selection.hottest,
-            )
+            match = pending.pop(0) if pending and pending[0].pattern == line.pattern else None
+            if match is None:
+                line.clear()
+                continue
+
+            line.show(match.value, match.label, hottest=match is selection.hottest)
 
     # --- editing ----------------------------------------------------------------------------------
 

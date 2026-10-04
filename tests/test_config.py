@@ -439,3 +439,25 @@ def test_a_copy_does_not_share_the_lists():
     copied.sensors.filters["aida64"].append("GPU")
 
     assert config.sensors.filters["aida64"] == ["CPU"]
+
+
+@pytest.mark.parametrize(("alias", "source"), [("ohm", "lhm"), ("Lenovo", "lenovo-wmi"), ("lhm_web", "lhm-web")])
+def test_old_filters_land_under_the_code_name_when_the_file_uses_an_alias(path, alias, source):
+    """Every reader looks the list up by the code name; under the alias it would be lost."""
+    path.write_text(f"sensors:\n  provider: {alias}\n  cpu_filter: Core Max\n", encoding="utf-8")
+
+    assert cfg.filters_for(cfg.load(path), source) == ["Core\\ Max", "GPU"]
+
+
+def test_a_repeated_filter_is_refused(path):
+    path.write_text("sensors:\n  filters:\n    aida64: [CPU, GPU, CPU]\n", encoding="utf-8")
+
+    with pytest.raises(cfg.ConfigError, match=r"aida64\[2\].*already in the list"):
+        cfg.load(path)
+
+
+def test_every_alias_names_a_registered_source():
+    from iets_speed_control.sensors import PROVIDERS
+    from iets_speed_control.util.source_names import ALIASES
+
+    assert set(ALIASES.values()) <= set(PROVIDERS)

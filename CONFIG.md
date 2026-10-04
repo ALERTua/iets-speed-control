@@ -111,6 +111,8 @@ sensors:
 - A filter that matches nothing does not count. When no filter matches anything, the app reads 0 °C, which holds the fan at the curve's floor. Settings → Sensors marks such a filter in red.
 - Settings → Sensors offers the labels the source reports right now. A label picked there is stored escaped, so that brackets and dots in it match literally.
 - Labels differ between sources, so each source keeps its own list.
+- A filter appears once per list; a repeat is refused.
+- Every filter runs against every label on every tick. Keep expressions simple: a nested repeat such as `(a+)+` can take a very long time on some labels and stall the fan control while it runs.
 
 The older keys `sensors.cpu_filter` and `sensors.gpu_filter` are still read once. Their values, escaped, become the filter list of the current source, and the next save writes the new form.
 
