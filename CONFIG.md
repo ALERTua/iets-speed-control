@@ -8,6 +8,8 @@ All settings live in one YAML file:
 
 The file is optional. Without it the app runs on the defaults below and creates nothing.
 
+To run on another file, set the environment variable `IETS_SPEED_CONTROL_CONFIG` to its full path before you start the app. The test suite uses it to keep your own file out of its runs.
+
 **Only what you changed is written.** Saving from the GUI, or from your own edits, keeps the file to the values that
 differ from the defaults — it reads as a list of your decisions, not a dump of every knob. A value you return to its
 default is removed from the file rather than written out. Comments you add by hand are preserved on keys that are still

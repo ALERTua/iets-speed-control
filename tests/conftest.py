@@ -4,9 +4,12 @@ The probes deliberately re-query WMI instead of reusing the providers, so an e2e
 provider against an independently obtained answer rather than against itself.
 """
 
+import base64
 import json
 import logging
+import os
 import shutil
+import sys
 import tempfile
 import urllib.request
 from dataclasses import fields
@@ -16,7 +19,14 @@ import pytest
 import pythoncom
 from wmi import WMI
 
-from iets_speed_control.sensors import PROVIDERS
+# The suite runs on the defaults, never on the developer's own config.yaml. The package loads its
+# configuration file the moment it is imported, so the path has to point elsewhere before the first
+# import below: then the developer's file is never even opened, a broken one cannot stop the suite,
+# and a save() without an explicit path lands in this throwaway folder.
+TEST_CONFIG_DIR = Path(tempfile.mkdtemp(prefix="iets-speed-control-tests-"))
+os.environ["IETS_SPEED_CONTROL_CONFIG"] = str(TEST_CONFIG_DIR / "config.yaml")
+
+from iets_speed_control.sensors import PROVIDERS  # imported only after the config path is set
 from iets_speed_control.util import config as cfg
 from iets_speed_control.util.config import CONFIG
 
@@ -24,21 +34,12 @@ pythoncom.CoInitialize()  # type: ignore[union-attr]
 
 logger = logging.getLogger(__name__)
 
-# The suite runs on the defaults, never on the developer's own config.yaml. Importing the package has
-# already loaded that file into CONFIG, so its sections are replaced here, before any test or fixture
-# reads them; otherwise a source or a window position picked for daily use changes what the tests see.
-# The path is moved as well, so a save() without an explicit path lands in a throwaway folder instead
-# of overwriting the file the app runs on.
-TEST_CONFIG_DIR = Path(tempfile.mkdtemp(prefix="iets-speed-control-tests-"))
-cfg.CONFIG_DIR = TEST_CONFIG_DIR
-cfg.CONFIG_PATH = TEST_CONFIG_DIR / "config.yaml"
-_defaults = cfg.Config()
-for _section in fields(CONFIG):
-    setattr(CONFIG, _section.name, getattr(_defaults, _section.name))
-
 
 def pytest_unconfigure(config):
     shutil.rmtree(TEST_CONFIG_DIR, ignore_errors=True)
+    if TEST_CONFIG_DIR.exists():
+        # Something still holds a file in there; say so, or such folders pile up in %TEMP% unnoticed.
+        sys.stderr.write(f"\nCould not remove the test configuration folder {TEST_CONFIG_DIR}\n")
 
 
 def pytest_collection_modifyitems(items):
@@ -213,8 +214,13 @@ def probe_lhm() -> dict[str, float]:
 
 
 def probe_lhm_web() -> dict[str, float]:
+    settings = CONFIG.sensors.lhm_web
+    request = urllib.request.Request(settings.url)
+    if settings.username or settings.password:
+        token = base64.b64encode(f"{settings.username}:{settings.password}".encode()).decode("ascii")
+        request.add_header("Authorization", f"Basic {token}")
     try:
-        with urllib.request.urlopen(CONFIG.sensors.lhm_web.url, timeout=CONFIG.sensors.lhm_web.timeout) as response:
+        with urllib.request.urlopen(request, timeout=settings.timeout) as response:
             document = json.load(response)
     except Exception as e:  # noqa: BLE001 -- any transport or decode failure just means "unavailable"
         logger.debug(f"LibreHardwareMonitor web probe failed: {e}")
@@ -275,14 +281,35 @@ SOURCE_HINTS = {
     "aida64": "AIDA64 must be running with 'write sensors to WMI' and temperature sensors enabled",
     "lhm": "LibreHardwareMonitor must be running as administrator so it registers its WMI provider",
     "lenovo-wmi": "needs a Lenovo Legion laptop and a test run as administrator",
-    "lhm-web": f"LibreHardwareMonitor must serve {CONFIG.sensors.lhm_web.url} (Options -> Remote Web Server -> Run)",
+    "lhm-web": "LibreHardwareMonitor must serve sensors.lhm_web.url (Options -> Remote Web Server -> Run)",
 }
+
+
+def use_this_machines_web_server():
+    """Take sensors.lhm_web from the developer's own config.yaml, for the e2e tests only.
+
+    The rest of the suite runs on the defaults, but the web server's address and credentials belong to
+    the machine: on one whose server is not localhost:8085, the defaults would skip every lhm-web e2e
+    test. Only that section is taken, and an unreadable file leaves the defaults in place. clean_config
+    puts the defaults back after the test.
+    """
+    if not cfg.DEFAULT_CONFIG_PATH.exists():
+        return
+
+    try:
+        own = cfg.load(cfg.DEFAULT_CONFIG_PATH)
+    except cfg.ConfigError as e:
+        logger.warning(f"Ignoring the developer's config for the e2e tests: {e}")
+        return
+
+    CONFIG.sensors.lhm_web = own.sensors.lhm_web
 
 
 @pytest.fixture(params=sorted(PROVIDERS))
 def provider_name(request) -> str:
     """Each registered sensor source, skipped when the underlying app is not publishing data."""
     name = request.param
+    use_this_machines_web_server()
     if not PROBES[name]():
         pytest.skip(f"{name}: no temperatures available -- {SOURCE_HINTS[name]}")
 

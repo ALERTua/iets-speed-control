@@ -15,14 +15,43 @@ def path(tmp_path):
 # --- isolation from the developer's own file ----------------------------------------------------
 
 
-def test_the_suite_writes_to_a_throwaway_folder_not_the_real_config():
-    """A save() without a path must not overwrite the file the app runs on."""
-    from pathlib import Path
+def test_a_save_without_a_path_lands_in_the_throwaway_folder(tmp_path):
+    """The file the app runs on must survive a test that saves without naming a path."""
+    from conftest import TEST_CONFIG_DIR
 
-    real = Path.home() / ".iets-speed-control"
+    real = cfg.DEFAULT_CONFIG_PATH
+    before = real.read_bytes() if real.exists() else None
+    config = cfg.Config()
+    config.control.delay = 0.42
 
-    assert real not in cfg.CONFIG_PATH.parents
-    assert real != cfg.CONFIG_DIR
+    written = cfg.save(config)
+
+    assert written.parent == TEST_CONFIG_DIR
+    assert "0.42" in written.read_text(encoding="utf-8")
+    assert (real.read_bytes() if real.exists() else None) == before, "the developer's config.yaml changed"
+    written.unlink()
+
+
+def test_the_config_path_can_be_set_from_the_environment(tmp_path):
+    """The suite relies on it, and it is how a second, experimental configuration is run."""
+    import os
+    import subprocess
+    import sys
+
+    target = tmp_path / "elsewhere.yaml"
+    target.write_text("control:\n  delay: 0.33\n", encoding="utf-8")
+    script = "from iets_speed_control.util.config import CONFIG, CONFIG_PATH; print(CONFIG_PATH, CONFIG.control.delay)"
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "IETS_SPEED_CONTROL_CONFIG": str(target)},
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    )
+
+    assert result.stdout.split() == [str(target), "0.33"]
 
 
 def test_the_suite_starts_from_the_defaults():
