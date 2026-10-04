@@ -249,9 +249,9 @@ def test_a_rejected_edit_clears_once_a_good_one_lands(view):
 
 @pytest.fixture
 def web_server_rows(view):
-    """Show the web-server rows whatever source the developer's own config.yaml picks.
+    """Show the web-server rows, which exist only for lhm-web while the default source is aida64.
 
-    Those rows exist only for lhm-web, and a hidden row has no width and takes no typing.
+    A hidden row has no width and takes no typing.
     """
     CONFIG.sensors.provider = "lhm-web"
     view._apply_lhm_visibility()

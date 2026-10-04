@@ -6,8 +6,11 @@ provider against an independently obtained answer rather than against itself.
 
 import json
 import logging
+import shutil
+import tempfile
 import urllib.request
 from dataclasses import fields
+from pathlib import Path
 
 import pytest
 import pythoncom
@@ -20,6 +23,22 @@ from iets_speed_control.util.config import CONFIG
 pythoncom.CoInitialize()  # type: ignore[union-attr]
 
 logger = logging.getLogger(__name__)
+
+# The suite runs on the defaults, never on the developer's own config.yaml. Importing the package has
+# already loaded that file into CONFIG, so its sections are replaced here, before any test or fixture
+# reads them; otherwise a source or a window position picked for daily use changes what the tests see.
+# The path is moved as well, so a save() without an explicit path lands in a throwaway folder instead
+# of overwriting the file the app runs on.
+TEST_CONFIG_DIR = Path(tempfile.mkdtemp(prefix="iets-speed-control-tests-"))
+cfg.CONFIG_DIR = TEST_CONFIG_DIR
+cfg.CONFIG_PATH = TEST_CONFIG_DIR / "config.yaml"
+_defaults = cfg.Config()
+for _section in fields(CONFIG):
+    setattr(CONFIG, _section.name, getattr(_defaults, _section.name))
+
+
+def pytest_unconfigure(config):
+    shutil.rmtree(TEST_CONFIG_DIR, ignore_errors=True)
 
 
 def pytest_collection_modifyitems(items):

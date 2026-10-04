@@ -10,6 +10,24 @@ def path(tmp_path):
     return tmp_path / "config.yaml"
 
 
+# --- isolation from the developer's own file ----------------------------------------------------
+
+
+def test_the_suite_writes_to_a_throwaway_folder_not_the_real_config():
+    """A save() without a path must not overwrite the file the app runs on."""
+    from pathlib import Path
+
+    real = Path.home() / ".iets-speed-control"
+
+    assert real not in cfg.CONFIG_PATH.parents
+    assert real != cfg.CONFIG_DIR
+
+
+def test_the_suite_starts_from_the_defaults():
+    """The developer's own config.yaml is loaded on import; the suite must not see any of it."""
+    assert cfg.to_sparse(cfg.CONFIG) == {}
+
+
 # --- loading ------------------------------------------------------------------------------------
 
 
