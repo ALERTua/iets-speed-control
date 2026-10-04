@@ -152,11 +152,3 @@ class SerialDevice:
         Reading it here would cost a read timeout on every single tick, and nothing needs it.
         """
         await self.send_command(f"{field_name} {value}")
-
-
-async def main():
-    pass
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

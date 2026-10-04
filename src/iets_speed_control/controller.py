@@ -5,10 +5,8 @@ import logging
 from collections.abc import Callable
 from enum import Enum
 
-from serial.tools.list_ports_common import ListPortInfo
-from serial.tools.list_ports_windows import comports
-
-from .entities.dimmer import Dimmer
+from .entities.fan import FanDevice
+from .entities.tasmota_fan import create_fan
 from .sensors import SensorProvider, create_provider
 from .util.config import CONFIG, filters_for
 from .util.filters import Selection, select
@@ -37,7 +35,7 @@ class SpeedController:
     """
 
     def __init__(self, sensor_provider: SensorProvider | None = None):
-        self.device = Dimmer()
+        self.device: FanDevice = create_fan()
         self._sensors = sensor_provider or create_provider(CONFIG.sensors.provider)
         self._mode = Mode(CONFIG.control.mode)  # validated on load, so this cannot raise here
         self._manual_speed = CONFIG.control.manual_speed
@@ -214,7 +212,7 @@ class SpeedController:
 
     @property
     def port(self) -> str | None:
-        """Current serial port."""
+        """Where the fan device is reached, as shown to the user."""
         return self.device.port
 
     def set_callbacks(
@@ -275,7 +273,7 @@ class SpeedController:
     async def _set_fan_speed(self, value: int):
         """Set the fan speed on the device."""
         if self.device.connected:
-            await self.device.set_dimmer_value(value)
+            await self.device.set_speed(value)
             self._last_sent = value
             self._current_speed = value
             self._notify_speed()
@@ -294,44 +292,22 @@ class SpeedController:
             return self._last_sent
 
         self._ticks_since_resync = 0
-        reported = await self.device.read_dimmer_value()
+        reported = await self.device.read_speed()
         if reported is None:
             return self._last_sent
 
         if self._last_sent is not None and reported != self._last_sent:
-            logger.warning(f"{CONFIG.device.pwm_command} changed outside this app: {self._last_sent} -> {reported}")
+            logger.warning(f"Fan speed changed outside this app: {self._last_sent} -> {reported}")
 
         self._last_sent = reported
         return reported
 
     async def _connect(self) -> bool:
-        """Attempt to connect to the device."""
+        """Open the fan device; finding it, when it moved, is the device's own business."""
         if self.device.connected:
             return True
 
-        # Try direct connection first
         await self.device.connect()
-        if self.device.connected:
-            self._connected = True
-            self._notify_status()
-            return True
-
-        # Try to find device by name or serial
-        coms: list[ListPortInfo] = comports()
-        coms_match = []
-
-        if CONFIG.device.name:
-            coms_match = [_ for _ in coms if CONFIG.device.name in _.description]
-
-        if CONFIG.device.serial:
-            coms_match = [_ for _ in coms if _.serial_number and CONFIG.device.serial in _.serial_number] or coms_match
-
-        if coms_match:
-            com = coms_match[0]
-            self.device.port = com.device
-            logger.info(f"Serial Device found at {self.device.port}")
-            await self.device.connect()
-
         self._connected = self.device.connected
         self._notify_status()
         return self._connected
@@ -339,21 +315,21 @@ class SpeedController:
     async def reconnect(self) -> bool:
         """Close the port and open it again from the current device configuration.
 
-        Port, baudrate, timeout and the PWM command name are read when the Dimmer is built, so a
-        change to any of them needs a new device rather than a new connection. This runs on the
-        asyncio thread: call it from the GUI with asyncio.run_coroutine_threadsafe.
+        The device reads its settings (for Tasmota: port, baudrate, timeout, PWM command) when it is
+        built, so a change to any of them needs a new device rather than a new connection. This runs
+        on the asyncio thread: call it from the GUI with asyncio.run_coroutine_threadsafe.
         """
         if self.device.connected:
             await self.device.disconnect()
 
-        self.device = Dimmer()
+        self.device = create_fan()
         # Whatever the previous device reported says nothing about this one.
         self._last_sent = None
         self._ticks_since_resync = 0
         self._connected = False
         self._notify_status()
 
-        logger.info(f"Reconnecting to {self.device.port} at {self.device.baudrate} baud")
+        logger.info(f"Reconnecting to {self.device.describe()}")
         return await self._connect()
 
     async def _control_loop(self):

@@ -19,6 +19,9 @@ class FakeDevice:
     port = "FAKE"
     connected = True
 
+    def describe(self):
+        return self.port
+
     def __init__(self, value: int = 0):
         self.value = value
         self.reads = 0
@@ -30,11 +33,11 @@ class FakeDevice:
     async def disconnect(self):
         pass
 
-    async def read_dimmer_value(self):
+    async def read_speed(self):
         self.reads += 1
         return self.value
 
-    async def set_dimmer_value(self, value):
+    async def set_speed(self, value):
         self.value = value
         self.writes.append(value)
 

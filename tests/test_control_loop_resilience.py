@@ -30,18 +30,18 @@ class FlakyDevice(FakeDevice):
         super().__init__(value)
         self.failures = failures
         self.failed = 0
-        self.connected = connected  # a freshly built Dimmer is not connected until connect()
+        self.connected = connected  # a freshly built device is not connected until connect()
 
     async def connect(self):
         self.connected = True
         return True
 
-    async def read_dimmer_value(self):
+    async def read_speed(self):
         if self.failures:
             self.failures -= 1
             self.failed += 1
             raise RuntimeError("unexpected")
-        return await super().read_dimmer_value()
+        return await super().read_speed()
 
 
 class BrokenSensors:
@@ -159,7 +159,7 @@ async def test_recovery_turns_the_status_back(fast_loop, started):
 
 async def test_a_reconnect_during_a_fault_keeps_the_fault_visible(fast_loop, started, monkeypatch):
     """Reconnect reports the link; the fault stays in the same report, so the tray stays red."""
-    monkeypatch.setattr(controller_module, "Dimmer", lambda: FlakyDevice(failures=1000, connected=False))
+    monkeypatch.setattr(controller_module, "create_fan", lambda: FlakyDevice(failures=1000, connected=False))
     controller = make_controller(FlakyDevice(failures=1000))
     await started(controller)
     await wait_until(lambda: not controller.loop_ok)
@@ -220,10 +220,10 @@ async def test_after_a_device_fault_the_device_is_read_again(fast_loop, started)
     reads_before = device.reads
 
     async def failing_write(value):
-        device.set_dimmer_value = FakeDevice.set_dimmer_value.__get__(device)
+        device.set_speed = FakeDevice.set_speed.__get__(device)
         raise RuntimeError("write failed")
 
-    device.set_dimmer_value = failing_write
+    device.set_speed = failing_write
     controller._last_sent = 50  # force a write on the next tick, which then fails
 
     await wait_until(lambda: not controller.loop_ok)
