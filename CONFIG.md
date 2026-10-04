@@ -88,7 +88,7 @@ The serial device that drives the fan.
 
 | Key          | Default  | Meaning                                                                                                       |
 |--------------|----------|---------------------------------------------------------------------------------------------------------------|
-| `provider`   | `aida64` | `aida64`, `lhm` (LibreHardwareMonitor via WMI) or `lhm-web` (its web server). See README for what each needs. |
+| `provider`   | `aida64` | `aida64`, `lhm` (LibreHardwareMonitor via WMI), `lhm-web` (its web server) or `lenovo-wmi` (Lenovo Legion embedded controller; the app must run as administrator). See README for what each needs. |
 | `cpu_filter` | `CPU`    | Substring matched against sensor labels; the CPU temperature is the maximum of the matches.                   |
 | `gpu_filter` | `GPU`    | The same for the GPU.                                                                                         |
 

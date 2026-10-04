@@ -138,6 +138,7 @@ def reset_settings_view(view):
     view.editor.selected = 0
     view._initial_curve = controller.curve
     view._apply_lhm_visibility()
+    view._apply_admin_note()
     view.match_label.configure(text="not checked yet")
     view.connection_label.configure(text="")
     view.history_window = HISTORY_WINDOW_SECONDS
@@ -215,15 +216,37 @@ def probe_lhm_web() -> dict[str, float]:
     return found
 
 
+def probe_lenovo_wmi() -> dict[str, float]:
+    try:
+        method = WMI(namespace="root\\WMI").LENOVO_OTHER_METHOD()[0]
+    except Exception as e:  # noqa: BLE001 -- access denied and a missing class both surface as COM errors
+        logger.debug(f"Lenovo WMI probe failed: {e}")
+        return {}
+
+    found = {}
+    for label, capability in (("CPU", 0x05040000), ("GPU", 0x05050000), ("PCH", 0x05010000)):
+        try:
+            value = float(method.GetFeatureValue(IDs=capability)[0])
+        except Exception as e:  # noqa: BLE001 -- one missing sensor must not hide the others
+            logger.debug(f"Lenovo WMI probe has no {label}: {e}")
+            continue
+        if value > 0:
+            found[label] = value
+
+    return found
+
+
 PROBES = {
     "aida64": probe_aida64,
     "lhm": probe_lhm,
     "lhm-web": probe_lhm_web,
+    "lenovo-wmi": probe_lenovo_wmi,
 }
 
 SOURCE_HINTS = {
     "aida64": "AIDA64 must be running with 'write sensors to WMI' and temperature sensors enabled",
     "lhm": "LibreHardwareMonitor must be running as administrator so it registers its WMI provider",
+    "lenovo-wmi": "needs a Lenovo Legion laptop and a test run as administrator",
     "lhm-web": f"LibreHardwareMonitor must serve {CONFIG.sensors.lhm_web.url} (Options -> Remote Web Server -> Run)",
 }
 

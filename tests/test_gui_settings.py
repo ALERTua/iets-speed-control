@@ -247,7 +247,17 @@ def test_a_rejected_edit_clears_once_a_good_one_lands(view):
     assert not row.error.winfo_manager()
 
 
-def test_a_bad_web_server_timeout_is_refused(view):
+@pytest.fixture
+def web_server_rows(view):
+    """Show the web-server rows whatever source the developer's own config.yaml picks.
+
+    Those rows exist only for lhm-web, and a hidden row has no width and takes no typing.
+    """
+    CONFIG.sensors.provider = "lhm-web"
+    view._apply_lhm_visibility()
+
+
+def test_a_bad_web_server_timeout_is_refused(view, web_server_rows):
     before = CONFIG.sensors.lhm_web.timeout
 
     row = edit(view, "Sensors", "Web server timeout", "0")
@@ -299,6 +309,51 @@ def test_changing_the_smoothing_window_rebuilds_the_smoothers(view):
     assert view.controller._gpu_smoother.window == 9
 
 
+@pytest.fixture
+def unelevated(monkeypatch):
+    from iets_speed_control.sensors import base
+
+    monkeypatch.setattr(base, "is_elevated", lambda: False)
+
+
+def test_picking_the_lenovo_source_without_admin_rights_says_why_it_will_not_read(view, unelevated):
+    from iets_speed_control.gui.settings import ADMIN_NOTE
+    from iets_speed_control.gui.theme import ERROR_COLOR
+
+    choose(row_named(view, "Sensors", "Temperature source"), "Lenovo Legion (WMI)")
+
+    assert CONFIG.sensors.provider == "lenovo-wmi"
+    assert view.admin_label.winfo_manager(), "the pick clears the row's error line; the note must survive it"
+    assert view.admin_label.cget("text") == ADMIN_NOTE
+    assert view.admin_label.cget("text_color") == ERROR_COLOR
+
+
+def test_the_admin_note_goes_away_with_the_lenovo_source(view, unelevated):
+    choose(row_named(view, "Sensors", "Temperature source"), "Lenovo Legion (WMI)")
+
+    choose(row_named(view, "Sensors", "Temperature source"), "AIDA64")
+
+    assert not view.admin_label.winfo_manager()
+
+
+def test_an_elevated_app_shows_no_admin_note(view, monkeypatch):
+    from iets_speed_control.sensors import base
+
+    monkeypatch.setattr(base, "is_elevated", lambda: True)
+
+    choose(row_named(view, "Sensors", "Temperature source"), "Lenovo Legion (WMI)")
+
+    assert not view.admin_label.winfo_manager()
+
+
+def test_a_hand_written_alias_still_gets_the_admin_note(view, unelevated):
+    CONFIG.sensors.provider = "lenovo"
+
+    view._apply_admin_note()
+
+    assert view.admin_label.winfo_manager()
+
+
 def test_the_web_server_rows_appear_only_for_that_source(view):
     CONFIG.sensors.provider = "aida64"
     view._apply_lhm_visibility()
@@ -314,7 +369,7 @@ def test_the_password_is_masked(view):
     assert row_named(view, "Sensors", "Web server password").entry.cget("show") == "*"
 
 
-def test_the_web_server_url_reaches_the_provider_without_a_rebuild(view):
+def test_the_web_server_url_reaches_the_provider_without_a_rebuild(view, web_server_rows):
     """The provider reads the configuration per request, so editing the URL takes effect at once."""
     from iets_speed_control.sensors import LibreHardwareMonitorWebProvider
 
@@ -327,7 +382,7 @@ def test_the_web_server_url_reaches_the_provider_without_a_rebuild(view):
 # --- row layout ----------------------------------------------------------------------------------
 
 
-def test_no_description_is_cut_off(view, tk_root):
+def test_no_description_is_cut_off(view, tk_root, web_server_rows):
     """Descriptions have to fit the column they are in, because nothing tells you when they do not.
 
     Grid sizes the control column to the widest control in the whole card, so one wide control
@@ -354,6 +409,13 @@ def test_no_description_is_cut_off(view, tk_root):
                 needed = row.subtitle_label.winfo_reqwidth()
                 if needed > room:
                     too_wide.append(f"{name}/{row.title}: needs {needed}px, has {room}px: {row.subtitle!r}")
+
+            # The admin note sits under the source selector's description, in the same column.
+            if name == "Sensors":
+                room = view.provider_row.text.winfo_width()
+                needed = view.admin_label.winfo_reqwidth()
+                if needed > room:
+                    too_wide.append(f"Sensors/admin note: needs {needed}px, has {room}px")
     finally:
         tk_root.geometry(was)
         tk_root.update()
