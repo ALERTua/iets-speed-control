@@ -165,8 +165,12 @@ plans/
 # ruff and pytest put a .gitignore into their own caches; named here for tools that ignore it
 .ruff_cache/
 
-# VS Code
-.vscode/
+# VS Code: personal state stays out, the shared workspace files stay trackable
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
 
 # Windows
 Thumbs.db
