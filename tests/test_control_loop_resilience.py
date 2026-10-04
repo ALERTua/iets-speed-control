@@ -110,7 +110,11 @@ async def test_a_failing_tick_shows_as_disconnected(fast_loop):
     await controller.start()
     await asyncio.sleep(0.05)
 
-    assert not controller.connected
-    assert any(args[0] is False for args in seen), f"the GUI never heard about it: {seen}"
+    # What the GUI goes by is the last status it was told, not the attribute: a tick marks the link
+    # up while it reads the sensors, before it fails again.
+    # start() reports the link down before the first tick, so the failure itself is the second one.
+    connected = [args[0] for args in seen]
+    assert connected.count(False) >= 2, f"the failure was never reported: {connected}"
+    assert connected[-1] is False, f"the GUI was left thinking all is well: {connected}"
 
     await controller.stop()
