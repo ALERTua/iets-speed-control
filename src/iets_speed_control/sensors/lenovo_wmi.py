@@ -9,7 +9,7 @@ import logging
 
 from wmi import WMI
 
-from .base import ensure_com_initialized, is_elevated, to_temperature
+from .base import ensure_com_initialized, lacks_admin_rights, to_temperature
 
 logger = logging.getLogger(__name__)
 
@@ -29,13 +29,20 @@ class LenovoWmiProvider:
     requires_admin = True
     WMI_NAMESPACE = "root\\WMI"
 
+    def __init__(self):
+        self._told_about_admin_rights = False
+
     def get_temperatures(self) -> dict[str, float]:
         output: dict[str, float] = {}
-        if not is_elevated():
-            logger.error(
-                "Lenovo WMI answers only to administrators. Run IETS Speed Control as administrator"
-                " to read temperatures from it."
-            )
+        if lacks_admin_rights(self):
+            # Said once: the loop polls every second, a process never gains rights while it runs, and
+            # Home and Settings keep showing the reason anyway.
+            if not self._told_about_admin_rights:
+                logger.error(
+                    "Lenovo WMI answers only to administrators. Run IETS Speed Control as administrator"
+                    " to read temperatures from it."
+                )
+                self._told_about_admin_rights = True
             return output
 
         ensure_com_initialized()
@@ -52,12 +59,17 @@ class LenovoWmiProvider:
         method = methods[0]
         for label, capability in CAPABILITIES.items():
             try:
-                (value,) = method.GetFeatureValue(IDs=capability)
+                answer = method.GetFeatureValue(IDs=capability)
             except Exception as e:  # noqa: BLE001 -- a model without this sensor fails the call, not the rest
                 logger.debug(f"Lenovo WMI has no {label} temperature: {e}")
                 continue
 
-            temperature = to_temperature(value)
+            # The wmi package returns the out-parameters as a tuple, and GetFeatureValue has exactly one.
+            if len(answer) != 1:
+                logger.debug(f"Lenovo WMI answered {label} with {answer!r}, expected one value")
+                continue
+
+            temperature = to_temperature(answer[0])
             # No live chip reads 0 °C, so a zero is a missing sensor rather than a cold one.
             if temperature is None or temperature <= 0:
                 continue

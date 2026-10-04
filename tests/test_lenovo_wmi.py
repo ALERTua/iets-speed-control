@@ -33,6 +33,8 @@ class FakeMethod:
         value = self.readings[IDs]
         if isinstance(value, Exception):
             raise value
+        if isinstance(value, tuple):  # a firmware that answers with something other than one value
+            return value
         return (value,)
 
 
@@ -51,13 +53,11 @@ class FakeWmi:
 @pytest.fixture
 def elevated(monkeypatch):
     monkeypatch.setattr(sensors_base, "is_elevated", lambda: True)
-    monkeypatch.setattr(lenovo_wmi, "is_elevated", lambda: True)
 
 
 @pytest.fixture
 def not_elevated(monkeypatch):
     monkeypatch.setattr(sensors_base, "is_elevated", lambda: False)
-    monkeypatch.setattr(lenovo_wmi, "is_elevated", lambda: False)
 
 
 @pytest.fixture
@@ -90,6 +90,30 @@ def test_without_admin_rights_it_says_so_and_does_not_query(not_elevated, fake_w
 
     assert fake_wmi.calls == 0, "a query Windows will refuse is not worth making"
     assert any("administrator" in record.message for record in caplog.records)
+
+
+def test_the_missing_rights_are_reported_once_not_on_every_poll(not_elevated, fake_wmi, caplog):
+    """The loop reads about once a second; a line per read would bury the rest of the log."""
+    provider = LenovoWmiProvider()
+
+    with caplog.at_level(logging.ERROR):
+        for _ in range(3):
+            provider.get_temperatures()
+
+    assert len([r for r in caplog.records if "administrator" in r.message]) == 1
+
+
+def test_an_answer_with_the_wrong_number_of_values_is_skipped(elevated, fake_wmi, caplog):
+    fake_wmi.instances = [FakeMethod({**READINGS, 0x05050000: (72, 1)})]
+
+    # Named, because the package logger keeps whatever level an earlier test configured.
+    with caplog.at_level(logging.DEBUG, logger=lenovo_wmi.__name__):
+        readings = LenovoWmiProvider().get_temperatures()
+
+    assert readings == {"CPU": 83.0, "PCH": 74.0}
+    assert any("expected one value" in record.message for record in caplog.records), (
+        "a firmware that answers differently must not read as a model without the sensor"
+    )
 
 
 def test_a_sensor_the_model_lacks_does_not_hide_the_others(elevated, fake_wmi):

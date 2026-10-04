@@ -45,7 +45,7 @@ def is_elevated() -> bool:
         return False
 
 
-def lacks_admin_rights(provider) -> bool:
+def lacks_admin_rights(provider: SensorProvider | type[SensorProvider] | None) -> bool:
     """Whether `provider` (an instance or a class) cannot work because this process is not elevated.
 
     A source that needs administrator rights reports itself by `requires_admin`; the others never do.

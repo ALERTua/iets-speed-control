@@ -337,9 +337,11 @@ def test_the_admin_note_goes_away_with_the_lenovo_source(view, unelevated):
 
 
 def test_an_elevated_app_shows_no_admin_note(view, monkeypatch):
-    from iets_speed_control.sensors import base
+    from iets_speed_control.sensors import LenovoWmiProvider, base
 
     monkeypatch.setattr(base, "is_elevated", lambda: True)
+    # The pick reads the new source once in the background; keep that off the real hardware.
+    monkeypatch.setattr(LenovoWmiProvider, "get_temperatures", lambda self: {})
 
     choose(row_named(view, "Sensors", "Temperature source"), "Lenovo Legion (WMI)")
 
@@ -382,7 +384,7 @@ def test_the_web_server_url_reaches_the_provider_without_a_rebuild(view, web_ser
 # --- row layout ----------------------------------------------------------------------------------
 
 
-def test_no_description_is_cut_off(view, tk_root, web_server_rows):
+def test_no_description_is_cut_off(view, tk_root, web_server_rows, monkeypatch):
     """Descriptions have to fit the column they are in, because nothing tells you when they do not.
 
     Grid sizes the control column to the widest control in the whole card, so one wide control
@@ -391,7 +393,14 @@ def test_no_description_is_cut_off(view, tk_root, web_server_rows):
 
     Measured at the narrowest window the app allows, since that is where the columns are tightest.
     """
+    from iets_speed_control.gui import settings
     from iets_speed_control.gui.theme import RAIL_EXPANDED_WIDTH, WINDOW_MIN_SIZE
+
+    # The web-server rows show only for lhm-web, and the admin note only for a source that needs
+    # rights this process lacks. Neither real setup shows both, so the note is shown on its own terms.
+    monkeypatch.setattr(settings, "lacks_admin_rights", lambda provider: True)
+    view._apply_admin_note()
+    assert view.admin_label.winfo_manager(), "test setup: the note must be on screen to be measured"
 
     was = tk_root.geometry()
     content_width = WINDOW_MIN_SIZE[0] - RAIL_EXPANDED_WIDTH
@@ -414,7 +423,7 @@ def test_no_description_is_cut_off(view, tk_root, web_server_rows):
             if name == "Sensors":
                 room = view.provider_row.text.winfo_width()
                 needed = view.admin_label.winfo_reqwidth()
-                if needed > room:
+                if needed > room or view.admin_label.winfo_width() < needed:
                     too_wide.append(f"Sensors/admin note: needs {needed}px, has {room}px")
     finally:
         tk_root.geometry(was)
