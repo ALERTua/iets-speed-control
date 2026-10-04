@@ -11,7 +11,7 @@ from typing import ClassVar
 import pytest
 
 from iets_speed_control.controller import SpeedController
-from iets_speed_control.entities.dimmer import Dimmer
+from iets_speed_control.entities.tasmota_fan import TasmotaSerialFan
 from iets_speed_control.sensors import Aida64Provider, LibreHardwareMonitorWebProvider
 from iets_speed_control.util import config as cfg
 from iets_speed_control.util.config import CONFIG
@@ -46,7 +46,7 @@ def test_a_new_device_uses_the_current_port(clean_config):
     """Binding CONFIG in the signature default would freeze the port at import time."""
     CONFIG.device.port = "COM42"
 
-    assert Dimmer().port == "COM42"
+    assert TasmotaSerialFan().port == "COM42"
 
 
 def test_a_new_device_uses_the_current_baudrate_timeout_and_command(clean_config):
@@ -54,7 +54,7 @@ def test_a_new_device_uses_the_current_baudrate_timeout_and_command(clean_config
     CONFIG.device.timeout = 0.7
     CONFIG.device.pwm_command = "Channel1"
 
-    device = Dimmer()
+    device = TasmotaSerialFan()
 
     assert (device.baudrate, device.timeout, device.dimmer_command) == (9600, 0.7, "Channel1")
 
@@ -62,7 +62,7 @@ def test_a_new_device_uses_the_current_baudrate_timeout_and_command(clean_config
 def test_explicit_arguments_still_win(clean_config):
     CONFIG.device.port = "COM42"
 
-    assert Dimmer(port="COM9").port == "COM9"
+    assert TasmotaSerialFan(port="COM9").port == "COM9"
 
 
 # --- swapping the sensor source ------------------------------------------------------------------
@@ -153,6 +153,9 @@ class FakeDevice:
         self.disconnected = False
         FakeDevice.instances.append(self)
 
+    def describe(self):
+        return f"{self.port} at {self.baudrate} baud"
+
     async def connect(self):
         self.connected = True
         return True
@@ -165,7 +168,7 @@ class FakeDevice:
 @pytest.fixture
 def fake_device(monkeypatch):
     FakeDevice.instances = []
-    monkeypatch.setattr("iets_speed_control.controller.Dimmer", FakeDevice)
+    monkeypatch.setattr("iets_speed_control.controller.create_fan", FakeDevice)
     return FakeDevice
 
 

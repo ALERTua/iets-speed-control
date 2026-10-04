@@ -11,7 +11,9 @@ driven by Windows CPU/GPU temperatures. Windows only. Python 3.14 (`requires-pyt
 | Path | What lives there |
 | --- | --- |
 | `controller.py` | `SpeedController`: the async control loop, mode, curve, smoothing, reconnect |
-| `entities/serial_device.py` | async serial I/O; `dimmer.py` adds `read/set_dimmer_value` |
+| `entities/fan.py` | `FanDevice`, what the controller needs from any fan: connect, `read_speed`, `set_speed` |
+| `entities/tasmota_fan.py` | `TasmotaSerialFan`, the one implementation: Tasmota console on a serial port, finds a moved port |
+| `entities/serial_device.py` | async serial I/O under it |
 | `sensors/` | one module per temperature source, behind the `SensorProvider` protocol |
 | `util/config.py` | the whole configuration layer; `CONFIG` is the live object |
 | `util/logger.py` | `configure_logging`, `reconfigure`; the only owner of global logging state |
