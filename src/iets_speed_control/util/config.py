@@ -28,7 +28,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG_PATH = Path.home() / ".iets-speed-control" / "config.yaml"
 # Read once, before the file is loaded on import: a separate file for an experiment, and the way the
 # test suite keeps the developer's own file out of its runs.
-CONFIG_PATH = Path(os.environ.get("IETS_SPEED_CONTROL_CONFIG") or DEFAULT_CONFIG_PATH)
+# Made absolute at once: a relative value would otherwise depend on where the app happened to be
+# started (a shortcut, a double-click, a shell) and quietly use another file.
+CONFIG_PATH = Path(os.environ.get("IETS_SPEED_CONTROL_CONFIG") or DEFAULT_CONFIG_PATH).expanduser().absolute()
 
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 # Kept here rather than imported from controller.Mode, which imports this module. A test asserts the

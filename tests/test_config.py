@@ -15,7 +15,7 @@ def path(tmp_path):
 # --- isolation from the developer's own file ----------------------------------------------------
 
 
-def test_a_save_without_a_path_lands_in_the_throwaway_folder(tmp_path):
+def test_a_save_without_a_path_lands_in_the_throwaway_folder():
     """The file the app runs on must survive a test that saves without naming a path."""
     from conftest import TEST_CONFIG_DIR
 
@@ -51,7 +51,8 @@ def test_the_config_path_can_be_set_from_the_environment(tmp_path):
         check=True,
     )
 
-    assert result.stdout.split() == [str(target), "0.33"]
+    # The whole line, not split(): a profile folder with a space in its name is a normal path.
+    assert result.stdout.strip() == f"{target} 0.33"
 
 
 def test_the_suite_starts_from_the_defaults():
@@ -490,3 +491,48 @@ def test_every_alias_names_a_registered_source():
     from iets_speed_control.util.source_names import ALIASES
 
     assert set(ALIASES.values()) <= set(PROVIDERS)
+
+
+def test_a_relative_config_path_is_made_absolute_at_once(tmp_path):
+    """Otherwise the file in use would depend on the folder the app happened to start in."""
+    import os
+    import subprocess
+    import sys
+
+    script = "from iets_speed_control.util.config import CONFIG_PATH; print(CONFIG_PATH)"
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        env={**os.environ, "IETS_SPEED_CONTROL_CONFIG": "relative.yaml"},
+        cwd=tmp_path,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    )
+
+    assert result.stdout.strip() == str(tmp_path / "relative.yaml")
+
+
+@pytest.mark.parametrize("document", ["control: 5\n", "device:\n  timeout: abc\n", "logging:\n  level: 5\n"])
+def test_a_developer_config_of_the_wrong_shape_does_not_stop_the_e2e_tests(tmp_path, monkeypatch, document):
+    """load() raises more than ConfigError for such a file; the e2e set-up must shrug it off."""
+    from conftest import use_this_machines_web_server
+
+    own = tmp_path / "config.yaml"
+    own.write_text(document, encoding="utf-8")
+    monkeypatch.setattr(cfg, "DEFAULT_CONFIG_PATH", own)
+    before = cfg.CONFIG.sensors.lhm_web
+
+    use_this_machines_web_server()
+
+    assert cfg.CONFIG.sensors.lhm_web is before
+
+
+def test_an_unusable_web_server_url_reads_as_unavailable(monkeypatch):
+    """An empty URL in the developer's file must skip the lhm-web e2e tests, not error them."""
+    from conftest import probe_lhm_web
+
+    monkeypatch.setattr(cfg.CONFIG.sensors.lhm_web, "url", "")
+
+    assert probe_lhm_web() == {}

@@ -215,11 +215,12 @@ def probe_lhm() -> dict[str, float]:
 
 def probe_lhm_web() -> dict[str, float]:
     settings = CONFIG.sensors.lhm_web
-    request = urllib.request.Request(settings.url)
-    if settings.username or settings.password:
-        token = base64.b64encode(f"{settings.username}:{settings.password}".encode()).decode("ascii")
-        request.add_header("Authorization", f"Basic {token}")
     try:
+        # Inside the try: an empty or malformed URL in the developer's file means "unavailable", a skip.
+        request = urllib.request.Request(settings.url)
+        if settings.username or settings.password:
+            token = base64.b64encode(f"{settings.username}:{settings.password}".encode()).decode("ascii")
+            request.add_header("Authorization", f"Basic {token}")
         with urllib.request.urlopen(request, timeout=settings.timeout) as response:
             document = json.load(response)
     except Exception as e:  # noqa: BLE001 -- any transport or decode failure just means "unavailable"
@@ -298,8 +299,8 @@ def use_this_machines_web_server():
 
     try:
         own = cfg.load(cfg.DEFAULT_CONFIG_PATH)
-    except cfg.ConfigError as e:
-        logger.warning(f"Ignoring the developer's config for the e2e tests: {e}")
+    except Exception as e:  # noqa: BLE001 -- a hand-edited file of the wrong shape raises more than ConfigError
+        logger.warning(f"Ignoring the developer's config for the e2e tests: {e!r}")
         return
 
     CONFIG.sensors.lhm_web = own.sensors.lhm_web
@@ -309,7 +310,8 @@ def use_this_machines_web_server():
 def provider_name(request) -> str:
     """Each registered sensor source, skipped when the underlying app is not publishing data."""
     name = request.param
-    use_this_machines_web_server()
+    if name == "lhm-web":  # only these tests need the machine's server, address and password included
+        use_this_machines_web_server()
     if not PROBES[name]():
         pytest.skip(f"{name}: no temperatures available -- {SOURCE_HINTS[name]}")
 
