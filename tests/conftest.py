@@ -47,8 +47,8 @@ def pytest_collection_modifyitems(items):
 
     Derived from the fixtures a test asks for rather than written by hand, so a new widget test is
     marked whether or not its author remembers to. `just test-fast` uses the marker to leave the GUI
-    tests out; the full parallel run keeps each file on one worker (--dist loadfile) instead, so a
-    worker builds a module's panel only once.
+    tests out of its parallel run: Tk roots in several processes take the one keyboard focus from
+    each other, so the GUI tests only ever run serially.
     """
     for item in items:
         if "tk_root" in getattr(item, "fixturenames", ()):

@@ -26,10 +26,10 @@ pre:
 sync:
     uv sync --dev
 
-# The whole suite, the way pre-commit and CI run it: four workers, one test file each at a time,
-# so every file builds its GUI panel once in its own worker. About 12 s; serial takes about 16 s.
+# The whole suite, serial, the way pre-commit and CI run it: about 16 s. Not parallel on purpose;
+# see the Tests section of AGENTS.md.
 test:
-    uv run pytest -n 4 --dist loadfile
+    uv run pytest
 
 # Everything that does not need a Tk root, in parallel: about 2 s. This is the loop to use while
 # editing non-GUI code; skipping the GUI tests is what makes it quick. "-n auto" is deliberately
