@@ -140,7 +140,7 @@ Everything is optional: without a config file the app runs on its defaults.
 #### GUI
 
 - Run `uv run iets-speed-control-gui`
-- **Home** shows the connection state, the maximum the filters match, the fan speed and a history graph of the maximum
+- **Home** shows the connection state, the maximum the filters match, the fan speed, every filter with its current reading and sensor (the one giving the maximum is marked with ▶, one matching nothing is red), and a history graph of the maximum
   (ten minutes by default, adjustable in Settings -> Display)
 - **Settings** covers every configuration key, one card per section, with a search box across them:
   - **Curve** is the fan curve editor. The temperature axis is broken at 30 °C: below that nothing

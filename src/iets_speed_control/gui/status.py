@@ -1,4 +1,4 @@
-"""The Home destination: connection state, the three live numbers, temperature history, mode switch.
+"""The Home destination: connection state, the maximum and the fan, each filter's reading, history, mode.
 
 Speed control and the fan curve live in the Settings destination; navigation between the two is the
 rail's job, so nothing here opens another view.
@@ -16,6 +16,7 @@ import customtkinter as ctk
 
 from ..controller import Mode, SpeedController
 from ..sensors import lacks_admin_rights
+from .filter_readings import FilterReadings
 from .history import TemperatureHistory
 from .theme import ACCENT_COLOR, CARD, FAN_COLOR, HISTORY_WINDOW_SECONDS, MAX_COLOR, MUTED, UI_POLL_MS
 
@@ -61,6 +62,10 @@ class StatusPanel(ctk.CTkFrame):
             value.pack()
             self.value_labels[name] = value
 
+        # Every filter of the active source with its reading; the one that gives the maximum is marked.
+        self.filter_readings = FilterReadings(self, fg_color=CARD, corner_radius=8)
+        self.filter_readings.pack(fill="x", padx=14, pady=(0, 6), ipady=4)
+
         # The graph takes whatever room is left: a ten-minute span needs the width and height.
         self.history = TemperatureHistory(self, window_seconds=HISTORY_WINDOW_SECONDS, height=220)
         self.history.pack(fill="both", expand=True, padx=14, pady=4)
@@ -96,8 +101,9 @@ class StatusPanel(ctk.CTkFrame):
             self.history.redraw()
 
         if "temps" in latest:
-            max_temp, _selection = latest["temps"]
+            max_temp, selection = latest["temps"]
             self.value_labels["Max"].configure(text=f"{max_temp} °C")
+            self.filter_readings.show(selection)
         if "speed" in latest:
             self.value_labels["Fan"].configure(text=f"{latest['speed'][0]} %")
         if "status" in latest:

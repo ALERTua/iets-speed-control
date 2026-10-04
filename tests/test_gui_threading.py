@@ -223,7 +223,7 @@ def test_a_drain_redraws_the_graph_once_for_the_whole_batch(tk_root):
     panel.history.redraw = lambda: redraws.append(1)
 
     for cpu in (60, 62, 64, 66, 68):
-        panel._post("temps", (cpu, 50))
+        panel._post("temps", (cpu, Selection()))
     panel._drain()
 
     assert len(panel.history.samples) == 5, "every reading still has to be recorded"
@@ -254,7 +254,7 @@ def test_queue_is_unbounded_enough_to_survive_a_stalled_ui(tk_root):
     panel.stop_polling()
 
     for index in range(5000):
-        panel._post("temps", (index % 100, 50))
+        panel._post("temps", (index % 100, Selection()))
 
     assert isinstance(panel._updates, queue.Queue)
     assert panel._updates.qsize() == 5000
