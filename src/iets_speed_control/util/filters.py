@@ -8,13 +8,18 @@ because each source names its sensors its own way.
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 
 # What a source gets until its own list is chosen: the two filters the app shipped with.
 DEFAULT_FILTERS = ("CPU", "GPU")
 
 
+@lru_cache(maxsize=256)
 def compile_filter(pattern: str) -> re.Pattern:
-    """Compile one filter, with the reason in the message when it is not a usable expression."""
+    """Compile one filter, with the reason in the message when it is not a usable expression.
+
+    Cached: the control loop applies every filter on every tick, and the list rarely changes.
+    """
     if not isinstance(pattern, str) or not pattern.strip():
         raise ValueError(f"a filter has to be non-empty text, got {pattern!r}")
 
