@@ -32,14 +32,13 @@ Pick one with `sensors.provider` in the config file:
 | `aida64` (default) | AIDA64 via WMI                  | Paid, must stay running                                                                             |
 | `lhm`              | LibreHardwareMonitor via WMI    | Free; falls back to the OpenHardwareMonitor namespace. Not every machine registers the WMI provider |
 | `lhm-web`          | LibreHardwareMonitor web server | Free; works where the WMI provider does not                                                         |
+| `lenovo-wmi`       | Lenovo Legion embedded controller via WMI | Lenovo Legion laptops only; no monitoring app needed, but this app must run as administrator |
 
 Sensor labels differ between sources, so `sensors.cpu_filter` / `sensors.gpu_filter` may need adjusting when you
 switch. A filter that matches nothing yields 0 °C, which quietly drives the fan to its minimum — Settings →
 Sensors shows how many sensors each filter currently matches.
 
-If the source itself stops answering — AIDA64 closed, LibreHardwareMonitor's web server unreachable — the tray
-icon turns red and Home says which source went quiet. The fan keeps running on the curve's floor until it
-comes back.
+If the source itself stops answering — AIDA64 closed, LibreHardwareMonitor's web server unreachable, or this app not elevated for `lenovo-wmi` — the tray icon turns red and Home says which source went quiet. The fan keeps running on the curve's floor until it comes back.
 
 #### AIDA64 Preparation
 
@@ -108,6 +107,22 @@ are not live temperatures: `Distance to TjMax`, which *falls* as the chip heats 
 `Critical Temperature` or `Thermal Sensor High Limit`. A filter that catches either drives the fan from the
 wrong number — a `Distance to TjMax` of 60 on an idle CPU would spin the fan up for nothing. The defaults
 `cpu_filter: CPU` and `gpu_filter: GPU` avoid both.
+
+#### Lenovo Legion Preparation (`sensors.provider: lenovo-wmi`)
+
+Reads the CPU, GPU and chipset (PCH) temperatures straight from the laptop's embedded controller, through Lenovo's own WMI class `LENOVO_OTHER_METHOD`. Lenovo Legion Toolkit uses the same class for its CPU and GPU temperatures. Neither it nor any other monitoring app has to run.
+
+- Run IETS Speed Control as administrator. Windows refuses this WMI class to a process without administrator rights
+- If the app runs without administrator rights, Settings -> Sensors shows a red note under the source selector, and Home shows `No temperatures from lenovo-wmi: restart as administrator`
+
+The labels are `CPU`, `GPU` and `PCH`, so the default filters `cpu_filter: CPU` and `gpu_filter: GPU` work as they are. A model that does not report one of these sensors simply leaves it out. Check what your machine reports from an elevated PowerShell:
+
+```powershell
+$m = Get-CimInstance -Namespace root\WMI -ClassName LENOVO_OTHER_METHOD
+Invoke-CimMethod -InputObject $m -MethodName GetFeatureValue -Arguments @{ IDs = 0x05040000 }  # CPU
+```
+
+The HWiNFO64 switch in the Lenovo Legion Toolkit settings is not needed for this source. That switch only shares fan speeds and the battery temperature with HWiNFO64.
 
 ### Serial Device Preparation
 

@@ -1,5 +1,6 @@
 """Sensor provider contract shared by all temperature sources."""
 
+import ctypes
 import threading
 from typing import Protocol
 
@@ -34,6 +35,22 @@ def ensure_com_initialized():
     # noinspection PyUnresolvedReferences
     pythoncom.CoInitialize()  # type: ignore[union-attr]
     _com_state.initialized = True
+
+
+def is_elevated() -> bool:
+    """Whether this process runs with administrator rights."""
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined]
+    except AttributeError, OSError:
+        return False
+
+
+def lacks_admin_rights(provider: SensorProvider | type[SensorProvider] | None) -> bool:
+    """Whether `provider` (an instance or a class) cannot work because this process is not elevated.
+
+    A source that needs administrator rights reports itself by `requires_admin`; the others never do.
+    """
+    return bool(getattr(provider, "requires_admin", False)) and not is_elevated()
 
 
 def to_temperature(value) -> float | None:

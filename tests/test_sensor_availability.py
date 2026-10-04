@@ -183,6 +183,27 @@ def test_the_status_line_names_the_silent_source(panel):
     assert "lhm-web" in panel.status_label.cget("text")
 
 
+def test_the_status_line_says_to_restart_as_administrator(panel, monkeypatch):
+    from iets_speed_control.sensors import LenovoWmiProvider, base
+
+    monkeypatch.setattr(base, "is_elevated", lambda: False)
+    panel.controller._sensors = LenovoWmiProvider()
+
+    panel._apply_status(connected=True, running=True, sensors_ok=False)
+
+    assert "restart as administrator" in panel.status_label.cget("text")
+
+
+def test_a_source_that_needs_no_admin_rights_gets_no_such_advice(panel, monkeypatch):
+    from iets_speed_control.sensors import base
+
+    monkeypatch.setattr(base, "is_elevated", lambda: False)
+
+    panel._apply_status(connected=True, running=True, sensors_ok=False)
+
+    assert "administrator" not in panel.status_label.cget("text")
+
+
 def test_a_missing_device_still_reads_as_disconnected(panel):
     """Both can be wrong at once; the serial link is the one you fix first."""
     panel._apply_status(connected=False, running=True, sensors_ok=False)

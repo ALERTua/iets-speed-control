@@ -27,7 +27,7 @@ import customtkinter as ctk
 from serial.tools.list_ports_windows import comports
 
 from ..controller import Mode, SpeedController
-from ..sensors import PROVIDER_LABELS, PROVIDER_NAMES
+from ..sensors import PROVIDER_LABELS, PROVIDER_NAMES, find_provider, lacks_admin_rights
 from ..util.config import CONFIG, CONFIG_PATH, LOG_LEVELS, ConfigError, get_value, set_value, with_value
 from ..util.config import defaults as config_defaults
 from ..util.config import save as save_config
@@ -50,6 +50,7 @@ logger = logging.getLogger(__name__)
 
 BAUDRATES = ("9600", "19200", "38400", "57600", "115200")
 LHM_WEB = "lhm-web"
+ADMIN_NOTE = "Needs admin rights: restart as administrator"
 
 
 def format_span(seconds: int) -> str:
@@ -675,7 +676,7 @@ class SettingsView(ctk.CTkFrame):
     def _build_sensors_section(self):
         section = self._add_section("Sensors")
 
-        self._choice_row(
+        self.provider_row = self._choice_row(
             section,
             "Temperature source",
             "Which monitoring app the readings come from",
@@ -686,6 +687,11 @@ class SettingsView(ctk.CTkFrame):
             parse=lambda label: PROVIDER_NAMES.get(label, label),
             width=260,
             apply=self._apply_provider,
+        )
+        # Its own label rather than the row's error line: a successful pick clears that line right
+        # after applying, and this note has to outlive the pick that caused it.
+        self.admin_label = ctk.CTkLabel(
+            self.provider_row.text, text=ADMIN_NOTE, font=("", 10), text_color=ERROR_COLOR, anchor="w"
         )
 
         self.cpu_filter_row = self._combo_row(
@@ -753,9 +759,11 @@ class SettingsView(ctk.CTkFrame):
         section.on_show = self.refresh_sensor_match
         section.after_reset = self._on_provider_reset
         self._apply_lhm_visibility()
+        self._apply_admin_note()
 
     def _apply_provider(self, name):
         self._apply_lhm_visibility()
+        self._apply_admin_note()
         try:
             self.controller.sensors = name
         except ValueError as e:
@@ -773,6 +781,14 @@ class SettingsView(ctk.CTkFrame):
         visible = CONFIG.sensors.provider == LHM_WEB
         for row in self.lhm_rows:
             row.set_visible(visible)
+
+    def _apply_admin_note(self):
+        """Say next to the selector when the chosen source cannot work in a process that is not elevated."""
+        if lacks_admin_rights(find_provider(CONFIG.sensors.provider)):
+            if not self.admin_label.winfo_manager():
+                self.admin_label.pack(anchor="w", pady=(2, 0))
+        elif self.admin_label.winfo_manager():
+            self.admin_label.pack_forget()
 
     def refresh_sensor_match(self):
         """Read the active source once and report what the two filters catch."""

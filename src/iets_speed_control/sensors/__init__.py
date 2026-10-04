@@ -1,7 +1,8 @@
 """Temperature sources. Pick one with the sensors.provider configuration key."""
 
 from .aida64 import Aida64Provider
-from .base import SensorProvider
+from .base import SensorProvider, lacks_admin_rights
+from .lenovo_wmi import LenovoWmiProvider
 from .lhm import LibreHardwareMonitorProvider
 from .lhm_web import LibreHardwareMonitorWebProvider
 
@@ -9,6 +10,7 @@ PROVIDERS = {
     Aida64Provider.name: Aida64Provider,
     LibreHardwareMonitorProvider.name: LibreHardwareMonitorProvider,
     LibreHardwareMonitorWebProvider.name: LibreHardwareMonitorWebProvider,
+    LenovoWmiProvider.name: LenovoWmiProvider,
 }
 
 # Full names for the settings panel. The configuration file keeps the code names: they are short,
@@ -25,14 +27,20 @@ ALIASES = {
     "lhm_web": LibreHardwareMonitorWebProvider.name,
     "lhmweb": LibreHardwareMonitorWebProvider.name,
     "lhm-http": LibreHardwareMonitorWebProvider.name,
+    "lenovo_wmi": LenovoWmiProvider.name,
+    "lenovo": LenovoWmiProvider.name,
 }
+
+
+def find_provider(name: str) -> type[SensorProvider] | None:
+    """The class of the temperature source named by sensors.provider, aliases included, or None."""
+    key = (name or "").strip().lower()
+    return PROVIDERS.get(ALIASES.get(key, key))
 
 
 def create_provider(name: str) -> SensorProvider:
     """Instantiate the temperature source named by sensors.provider."""
-    key = (name or "").strip().lower()
-    key = ALIASES.get(key, key)
-    provider = PROVIDERS.get(key)
+    provider = find_provider(name)
     if provider is None:
         raise ValueError(f"Unknown sensors.provider {name!r}. Available: {', '.join(sorted(PROVIDERS))}.")
 
@@ -44,8 +52,11 @@ __all__ = [
     "PROVIDER_LABELS",
     "PROVIDER_NAMES",
     "Aida64Provider",
+    "LenovoWmiProvider",
     "LibreHardwareMonitorProvider",
     "LibreHardwareMonitorWebProvider",
     "SensorProvider",
     "create_provider",
+    "find_provider",
+    "lacks_admin_rights",
 ]

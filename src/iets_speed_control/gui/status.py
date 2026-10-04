@@ -15,6 +15,7 @@ import queue
 import customtkinter as ctk
 
 from ..controller import Mode, SpeedController
+from ..sensors import lacks_admin_rights
 from .history import TemperatureHistory
 from .theme import CARD, CPU_COLOR, FAN_COLOR, GPU_COLOR, HISTORY_WINDOW_SECONDS, MUTED, UI_POLL_MS
 
@@ -123,6 +124,8 @@ class StatusPanel(ctk.CTkFrame):
         elif not sensors_ok:
             source = getattr(self.controller.sensors, "name", "the sensor source")
             text = f"● No temperatures from {source}"
+            if lacks_admin_rights(self.controller.sensors):
+                text += ": restart as administrator"
             colour = DISCONNECTED_COLOR
         else:
             text = f"● Connected  {self.controller.port or ''}".rstrip()
