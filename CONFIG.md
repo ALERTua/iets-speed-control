@@ -89,12 +89,30 @@ The serial device that drives the fan.
 | Key          | Default  | Meaning                                                                                                       |
 |--------------|----------|---------------------------------------------------------------------------------------------------------------|
 | `provider`   | `aida64` | `aida64`, `lhm` (LibreHardwareMonitor via WMI), `lhm-web` (its web server) or `lenovo-wmi` (Lenovo Legion embedded controller; the app must run as administrator). See README for what each needs. |
-| `cpu_filter` | `CPU`    | Substring matched against sensor labels; the CPU temperature is the maximum of the matches.                   |
-| `gpu_filter` | `GPU`    | The same for the GPU.                                                                                         |
+| `filters`    | `{}`     | The filters of each source, by its code name. A source without an entry uses `[CPU, GPU]`. |
 
-Labels differ between providers, so a filter tuned for one may match nothing on another — and a filter that matches
-nothing yields 0 °C, which quietly drives the fan to its minimum. Open the provider's own window (or `lhm_web.url` in a
-browser) to see the exact labels your machine reports.
+### `sensors.filters`
+
+The curve is evaluated at the hottest reading that any filter of the active source matches.
+
+```yaml
+sensors:
+  filters:
+    lhm-web:
+      - Core Max
+      - hot ?spot
+    aida64:
+      - CPU Package
+      - GPU1
+```
+
+- A filter is a regular expression, searched anywhere in the sensor label and ignoring case: `hot ?spot` matches both `GPU Hot Spot` and `GPU1 Hotspot`.
+- A source needs at least one filter. An invalid expression stops the app with a message naming the filter.
+- A filter that matches nothing does not count. When no filter matches anything, the app reads 0 °C, which holds the fan at the curve's floor. Settings → Sensors marks such a filter in red.
+- Settings → Sensors offers the labels the source reports right now. A label picked there is stored escaped, so that brackets and dots in it match literally.
+- Labels differ between sources, so each source keeps its own list.
+
+The older keys `sensors.cpu_filter` and `sensors.gpu_filter` are still read once. Their values, escaped, become the filter list of the current source, and the next save writes the new form.
 
 ### `sensors.lhm_web`
 
@@ -137,7 +155,7 @@ control:
 - Temperatures must strictly increase. Percentages must be within 0–100.
 - Between two points the percentage is interpolated linearly.
 - Below the first point and above the last, the nearest percentage is held flat.
-- The CPU and GPU temperatures are each mapped through this curve and the higher result wins.
+- The curve is evaluated at the hottest reading the filters match (see `sensors.filters`).
 - Percentages that decrease are accepted but logged as a warning: the editor never produces that, so it usually means a
   hand-edit went wrong.
 

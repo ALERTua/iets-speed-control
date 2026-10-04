@@ -60,8 +60,6 @@ def fast_loop(monkeypatch):
     monkeypatch.setattr(CONFIG.control, "max_step", 100)
     monkeypatch.setattr(CONFIG.control, "ignore_less_than", 0)
     monkeypatch.setattr(CONFIG.control, "curve", [[40, 0], [90, 100]])
-    monkeypatch.setattr(CONFIG.sensors, "cpu_filter", "CPU")
-    monkeypatch.setattr(CONFIG.sensors, "gpu_filter", "GPU")
     monkeypatch.setattr(controller_module, "RETRY_DELAY", 0.01)
 
 

@@ -19,8 +19,6 @@ def fast_loop(monkeypatch):
     monkeypatch.setattr(CONFIG.control, "delay", 0.01)
     monkeypatch.setattr(CONFIG.control, "resync_every", 0)
     monkeypatch.setattr(CONFIG.control, "temp_window", 1)
-    monkeypatch.setattr(CONFIG.sensors, "cpu_filter", "CPU")
-    monkeypatch.setattr(CONFIG.sensors, "gpu_filter", "GPU")
 
 
 # --- the value reaches the device ----------------------------------------------------------------

@@ -9,7 +9,7 @@ from collections import deque
 
 import customtkinter as ctk
 
-from .theme import CARD, CPU_COLOR, GPU_COLOR, GRID, HISTORY_WINDOW_SECONDS, MUTED
+from .theme import CARD, GRID, HISTORY_WINDOW_SECONDS, MAX_COLOR, MUTED
 
 TEMP_FLOOR, TEMP_CEILING = 30, 100
 GRID_MARKS = (50, 75, 100)
@@ -18,13 +18,13 @@ POINTS_PER_PIXEL = 2  # above this the series is decimated before drawing
 
 
 class TemperatureHistory(ctk.CTkFrame):
-    """CPU and GPU readings over the last `window_seconds`."""
+    """The maximum the filters matched, over the last `window_seconds`."""
 
     def __init__(self, master, width=380, height=88, window_seconds=HISTORY_WINDOW_SECONDS, clock=time.monotonic):
         super().__init__(master, fg_color="transparent")
         self.window_seconds = float(window_seconds)
         self._clock = clock
-        self.samples: deque[tuple[float, float, float]] = deque(maxlen=HARD_SAMPLE_CAP)
+        self.samples: deque[tuple[float, float]] = deque(maxlen=HARD_SAMPLE_CAP)
 
         self.canvas = ctk.CTkCanvas(self, width=width, height=height, bg=CARD, highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
@@ -32,14 +32,14 @@ class TemperatureHistory(ctk.CTkFrame):
 
     # --- data -----------------------------------------------------------------------------
 
-    def add(self, cpu, gpu):
+    def add(self, value):
         """Record one reading. Drawing is the caller's business.
 
         A drain can replay a dozen readings into one visible frame, and redrawing per reading meant
         a dozen full canvas rebuilds to show the last of them. The caller redraws once when it is
         done adding.
         """
-        self.samples.append((self._clock(), float(cpu), float(gpu)))
+        self.samples.append((self._clock(), float(value)))
         self._prune()
 
     def _prune(self):
@@ -56,7 +56,7 @@ class TemperatureHistory(ctk.CTkFrame):
     # --- drawing --------------------------------------------------------------------------
 
     def _series(self, width):
-        """Return (cpu_path, gpu_path) in canvas coordinates, decimated to suit the width."""
+        """Return the line in canvas coordinates, decimated to suit the width."""
         now = self._clock()
         span = TEMP_CEILING - TEMP_FLOOR
         height = self.canvas.winfo_height() or int(self.canvas["height"])
@@ -64,16 +64,15 @@ class TemperatureHistory(ctk.CTkFrame):
         # Round the step up so the drawn point count never exceeds the target.
         target = max(1, int(width * POINTS_PER_PIXEL))
         step = max(1, -(-len(self.samples) // target))
-        cpu_path, gpu_path = [], []
+        path = []
         for index in range(0, len(self.samples), step):
-            stamp, cpu, gpu = self.samples[index]
+            stamp, value = self.samples[index]
             # Newest sample sits at the right edge; older ones scroll off to the left.
             x = width - (now - stamp) / self.window_seconds * width
-            for path, value in ((cpu_path, cpu), (gpu_path, gpu)):
-                clamped = min(max(value, TEMP_FLOOR), TEMP_CEILING)
-                path.extend((x, height - (clamped - TEMP_FLOOR) / span * height))
+            clamped = min(max(value, TEMP_FLOOR), TEMP_CEILING)
+            path.extend((x, height - (clamped - TEMP_FLOOR) / span * height))
 
-        return cpu_path, gpu_path
+        return path
 
     def redraw(self):
         canvas = self.canvas
@@ -93,17 +92,15 @@ class TemperatureHistory(ctk.CTkFrame):
         if self.filled_fraction() < 0.05:
             canvas.create_text(width / 2, height / 2, text="collecting…", anchor="center", fill=MUTED, font=("", 10))
 
-        cpu_path, gpu_path = self._series(width)
-        for path, colour in ((gpu_path, GPU_COLOR), (cpu_path, CPU_COLOR)):
-            # A single sample cannot be a line, and an empty history must still draw the grid.
-            if len(path) >= 4:
-                canvas.create_line(*path, fill=colour, width=2)
+        path = self._series(width)
+        # A single sample cannot be a line, and an empty history must still draw the grid.
+        if len(path) >= 4:
+            canvas.create_line(*path, fill=MAX_COLOR, width=2)
 
         if self.samples:
-            _stamp, cpu, gpu = self.samples[-1]
-            canvas.create_text(width - 6, 8, text=f"CPU {cpu:.0f}°", anchor="ne", fill=CPU_COLOR, font=("", 10, "bold"))
+            _stamp, value = self.samples[-1]
             canvas.create_text(
-                width - 6, 24, text=f"GPU {gpu:.0f}°", anchor="ne", fill=GPU_COLOR, font=("", 10, "bold")
+                width - 6, 8, text=f"Max {value:.0f}°", anchor="ne", fill=MAX_COLOR, font=("", 10, "bold")
             )
 
     def filled_fraction(self) -> float:

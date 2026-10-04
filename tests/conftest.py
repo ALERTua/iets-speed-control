@@ -158,7 +158,7 @@ def reset_settings_view(view):
     view._initial_curve = controller.curve
     view._apply_lhm_visibility()
     view._apply_admin_note()
-    view.match_label.configure(text="not checked yet")
+    view._show_filter_error(None)
     view.connection_label.configure(text="")
     view.history_window = HISTORY_WINDOW_SECONDS
     view.sync_mode()

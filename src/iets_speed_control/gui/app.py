@@ -132,11 +132,7 @@ class GUIApp:
 
     def _update_tray_tooltip(self):
         if self.tray_icon:
-            self.tray_icon.title = (
-                f"CPU: {self.controller.cpu_temp}°C | "
-                f"GPU: {self.controller.gpu_temp}°C | "
-                f"Fan: {self.controller.current_speed}%"
-            )
+            self.tray_icon.title = f"Max: {self.controller.max_temp}°C | Fan: {self.controller.current_speed}%"
 
     # --- windows --------------------------------------------------------------------------
 

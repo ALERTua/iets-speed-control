@@ -323,3 +323,107 @@ def test_integral_curve_values_are_written_without_a_decimal_point(path):
 
     assert "- [40, 10]" in text
     assert "- [80, 90.5]" in text, "genuine fractions must survive"
+
+
+# --- the filter list ------------------------------------------------------------------------------
+
+
+def test_a_source_without_its_own_filters_uses_the_defaults():
+    assert cfg.filters_for(cfg.Config(), "aida64") == ["CPU", "GPU"]
+
+
+def test_a_source_keeps_its_own_filters(path):
+    path.write_text("sensors:\n  filters:\n    lhm-web:\n      - Core Max\n      - GPU Hot Spot\n", encoding="utf-8")
+
+    config = cfg.load(path)
+
+    assert cfg.filters_for(config, "lhm-web") == ["Core Max", "GPU Hot Spot"]
+    assert cfg.filters_for(config, "aida64") == ["CPU", "GPU"], "other sources keep the defaults"
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        ("sensors:\n  filters: [CPU]\n", "must map a source"),
+        ("sensors:\n  filters:\n    aida64: []\n", "at least one filter"),
+        ("sensors:\n  filters:\n    aida64: CPU\n", "at least one filter"),
+        ("sensors:\n  filters:\n    aida64: ['CPU (']\n", r"aida64\[0\].*not a valid regular expression"),
+        ("sensors:\n  filters:\n    aida64: ['']\n", "non-empty text"),
+    ],
+)
+def test_unusable_filters_are_refused_by_key(path, document, message):
+    path.write_text(document, encoding="utf-8")
+
+    with pytest.raises(cfg.ConfigError, match=message):
+        cfg.load(path)
+
+
+def test_the_old_cpu_and_gpu_filters_become_the_sources_list(path):
+    path.write_text(
+        "sensors:\n  provider: lhm-web\n  cpu_filter: CPU Package\n  gpu_filter: GPU Hot Spot\n", encoding="utf-8"
+    )
+
+    config = cfg.load(path)
+
+    assert cfg.filters_for(config, "lhm-web") == [r"CPU\ Package", r"GPU\ Hot\ Spot"]
+
+
+def test_an_old_filter_keeps_matching_its_text_literally(path):
+    """They were plain text, so "(Tctl)" must not turn into a regex group."""
+    from iets_speed_control.util.filters import select
+
+    path.write_text("sensors:\n  cpu_filter: CPU (Tctl)\n", encoding="utf-8")
+
+    patterns = cfg.filters_for(cfg.load(path), "aida64")
+
+    assert select({"CPU (Tctl)": 70.0, "CPU Tctl": 99.0}, patterns).max_value == 70.0
+
+
+def test_a_missing_old_key_keeps_its_old_default(path):
+    """A file with only cpu_filter still meant GPU for the GPU."""
+    path.write_text("sensors:\n  cpu_filter: Core Max\n", encoding="utf-8")
+
+    assert cfg.filters_for(cfg.load(path), "aida64") == [r"Core\ Max", "GPU"]
+
+
+def test_old_filters_equal_to_the_defaults_leave_no_entry(path):
+    path.write_text("sensors:\n  cpu_filter: CPU\n  gpu_filter: GPU\n", encoding="utf-8")
+
+    assert cfg.load(path).sensors.filters == {}
+
+
+def test_old_filters_do_not_override_a_list_already_there(path, caplog):
+    path.write_text("sensors:\n  cpu_filter: Core Max\n  filters:\n    aida64: [Package]\n", encoding="utf-8")
+
+    config = cfg.load(path)
+
+    assert cfg.filters_for(config, "aida64") == ["Package"]
+    assert any("Ignoring" in record.message for record in caplog.records)
+
+
+def test_old_filter_keys_are_not_reported_as_unknown(path, caplog):
+    path.write_text("sensors:\n  cpu_filter: Core Max\n", encoding="utf-8")
+
+    cfg.load(path)
+
+    assert not any("unknown" in record.message for record in caplog.records)
+
+
+def test_saving_writes_the_list_and_drops_the_old_keys(path):
+    path.write_text("sensors:\n  cpu_filter: Core Max\n", encoding="utf-8")
+
+    cfg.save(cfg.load(path), path)
+    text = path.read_text(encoding="utf-8")
+
+    assert "cpu_filter" not in text
+    assert cfg.filters_for(cfg.load(path), "aida64") == [r"Core\ Max", "GPU"]
+
+
+def test_a_copy_does_not_share_the_lists():
+    config = cfg.Config()
+    config.sensors.filters["aida64"] = ["CPU"]
+
+    copied = cfg.copy(config)
+    copied.sensors.filters["aida64"].append("GPU")
+
+    assert config.sensors.filters["aida64"] == ["CPU"]

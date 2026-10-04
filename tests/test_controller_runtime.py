@@ -77,22 +77,20 @@ def test_the_source_can_be_swapped_by_name(controller):
 
 
 def test_swapping_the_source_starts_the_smoothers_over(controller):
-    controller._cpu_smoother.add(90)
-    controller._gpu_smoother.add(90)
+    controller._smoother.add(90)
 
     controller.sensors = "aida64"
 
-    assert controller._cpu_smoother.samples == (), "readings from the old source say nothing about the new one"
-    assert controller._gpu_smoother.samples == ()
+    assert controller._smoother.samples == (), "readings from the old source say nothing about the new one"
 
 
 def test_swapping_to_the_same_object_changes_nothing(controller):
-    controller._cpu_smoother.add(70)
+    controller._smoother.add(70)
     same = controller.sensors
 
     controller.sensors = same
 
-    assert controller._cpu_smoother.samples == (70.0,)
+    assert controller._smoother.samples == (70.0,)
 
 
 def test_an_unknown_source_is_refused(controller):
@@ -107,23 +105,22 @@ def test_an_unknown_source_is_refused(controller):
 # --- resizing the smoothing window ---------------------------------------------------------------
 
 
-def test_resizing_the_window_replaces_both_smoothers(controller):
-    before = (controller._cpu_smoother, controller._gpu_smoother)
+def test_resizing_the_window_replaces_the_smoother(controller):
+    before = controller._smoother
 
     controller.temp_window = 9
 
     assert controller.temp_window == 9
-    assert controller._cpu_smoother is not before[0]
-    assert controller._gpu_smoother is not before[1]
-    assert (controller._cpu_smoother.window, controller._gpu_smoother.window) == (9, 9)
+    assert controller._smoother is not before
+    assert controller._smoother.window == 9
 
 
 def test_the_same_window_keeps_the_history(controller):
-    controller._cpu_smoother.add(65)
+    controller._smoother.add(65)
 
     controller.temp_window = controller.temp_window
 
-    assert controller._cpu_smoother.samples == (65.0,)
+    assert controller._smoother.samples == (65.0,)
 
 
 def test_a_window_below_one_is_clamped(controller):
@@ -134,9 +131,9 @@ def test_a_window_below_one_is_clamped(controller):
 
 def test_the_window_takes_effect_on_the_next_reading(controller):
     controller.temp_window = 1
-    controller._cpu_smoother.add(50)
+    controller._smoother.add(50)
 
-    assert controller._cpu_smoother.add(90) == 90, "a window of 1 must not average anything in"
+    assert controller._smoother.add(90) == 90, "a window of 1 must not average anything in"
 
 
 # --- reconnecting --------------------------------------------------------------------------------

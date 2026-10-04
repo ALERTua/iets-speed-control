@@ -10,6 +10,7 @@ import threading
 
 import pytest
 
+from iets_speed_control.util.filters import Selection
 from iets_speed_control.util.tools import calculate_dimmer_value, curve_to_ranges
 
 
@@ -63,22 +64,22 @@ def test_timeline_choices_are_labelled_readably():
 
 def test_samples_older_than_the_window_are_dropped(history, clock):
     for _ in range(5):
-        history.add(60, 50)
+        history.add(60)
         clock.advance(100)  # 5 samples spanning 400 s
 
     assert len(history.samples) == 5
 
     clock.advance(500)  # now the oldest are beyond the 600 s window
-    history.add(60, 50)
+    history.add(60)
 
-    ages = [clock.now - stamp for stamp, _cpu, _gpu in history.samples]
+    ages = [clock.now - stamp for stamp, _value in history.samples]
     assert all(age <= history.window_seconds for age in ages), ages
 
 
 def test_ten_minutes_of_samples_are_all_retained(history, clock):
     """The complaint that started this: the graph only showed the last minute."""
     for _ in range(120):  # 10 minutes at a 5 s cadence
-        history.add(60, 50)
+        history.add(60)
         clock.advance(5)
 
     span = history.samples[-1][0] - history.samples[0][0]
@@ -87,18 +88,18 @@ def test_ten_minutes_of_samples_are_all_retained(history, clock):
 
 def test_shrinking_the_window_drops_what_no_longer_fits(history, clock):
     for _ in range(10):
-        history.add(60, 50)
+        history.add(60)
         clock.advance(60)  # 10 minutes of samples
 
     history.set_window(120)
 
-    ages = [clock.now - stamp for stamp, _cpu, _gpu in history.samples]
+    ages = [clock.now - stamp for stamp, _value in history.samples]
     assert all(age <= 120 for age in ages), ages
 
 
 def test_widening_the_window_keeps_existing_samples(history, clock):
     for _ in range(5):
-        history.add(60, 50)
+        history.add(60)
         clock.advance(10)
 
     before = len(history.samples)
@@ -109,7 +110,7 @@ def test_widening_the_window_keeps_existing_samples(history, clock):
 
 def test_empty_and_single_sample_histories_draw_without_error(history):
     history.redraw()
-    history.add(55, 45)
+    history.add(55)
     history.redraw()
 
     assert len(history.samples) == 1
@@ -117,13 +118,13 @@ def test_empty_and_single_sample_histories_draw_without_error(history):
 
 def test_long_histories_are_decimated_for_drawing(history, clock):
     for _ in range(4000):
-        history.add(60, 50)
+        history.add(60)
         clock.advance(0.1)
 
-    cpu_path, _gpu_path = history._series(width=300)
+    path = history._series(width=300)
 
     # Two coordinates per point, capped at POINTS_PER_PIXEL per pixel.
-    assert len(cpu_path) // 2 <= 300 * 2 + 1, len(cpu_path) // 2
+    assert len(path) // 2 <= 300 * 2 + 1, len(path) // 2
 
 
 def test_span_label_reads_in_minutes(history):
@@ -154,7 +155,7 @@ def test_controller_callbacks_never_touch_widgets(tk_root):
             raise AssertionError(f"widget touched from a worker thread: .{name}")
 
     panel.history = Explodes()
-    panel.value_labels = {"CPU": Explodes(), "GPU": Explodes(), "Fan": Explodes()}
+    panel.value_labels = {"Max": Explodes(), "Fan": Explodes()}
     panel.status_label = Explodes()
 
     errors = []
@@ -183,13 +184,12 @@ def test_drain_applies_queued_updates(tk_root):
     panel = StatusPanel(tk_root, SpeedController())
     panel.stop_polling()
 
-    panel._post("temps", (71, 58))
+    panel._post("temps", (71, Selection()))
     panel._post("speed", (42,))
     panel._drain()
     tk_root.update()
 
-    assert "71" in panel.value_labels["CPU"].cget("text")
-    assert "58" in panel.value_labels["GPU"].cget("text")
+    assert "71" in panel.value_labels["Max"].cget("text")
     assert "42" in panel.value_labels["Fan"].cget("text")
     assert len(panel.history.samples) == 1
     panel.destroy()
@@ -203,12 +203,12 @@ def test_drain_keeps_every_reading_for_the_graph(tk_root):
     panel = StatusPanel(tk_root, SpeedController())
     panel.stop_polling()
 
-    for cpu in (60, 62, 64, 66):
-        panel._post("temps", (cpu, 50))
+    for value in (60, 62, 64, 66):
+        panel._post("temps", (value, Selection()))
     panel._drain()
 
     assert len(panel.history.samples) == 4
-    assert "66" in panel.value_labels["CPU"].cget("text")
+    assert "66" in panel.value_labels["Max"].cget("text")
     panel.destroy()
 
 
@@ -275,16 +275,16 @@ def test_dimmer_value_is_always_an_integer():
 
 def test_a_fresh_history_says_it_is_collecting(history, clock):
     """A ten-minute window starts as a sliver at the right edge; it must not read as broken."""
-    history.add(60, 50)
+    history.add(60)
     clock.advance(2)
-    history.add(61, 50)
+    history.add(61)
 
     assert history.filled_fraction() < 0.05
 
 
 def test_a_full_window_is_not_marked_as_collecting(history, clock):
     for _ in range(60):
-        history.add(60, 50)
+        history.add(60)
         clock.advance(10)  # ten minutes of samples
 
     assert history.filled_fraction() > 0.9
