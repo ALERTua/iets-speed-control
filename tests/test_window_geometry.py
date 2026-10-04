@@ -208,6 +208,16 @@ def test_nothing_saved_means_nothing_applied(app, tk_root, monkeypatch):
     assert tk_root.geometry() == before
 
 
+def test_the_tray_settings_item_shows_the_window_even_without_the_rail(app, monkeypatch):
+    """Showing the window does not depend on the navigation rail being built."""
+    shown = []
+    monkeypatch.setattr(app, "_show_window", lambda: shown.append(True))
+
+    app.show_settings()
+
+    assert shown
+
+
 # --- minimising ----------------------------------------------------------------------------------
 
 

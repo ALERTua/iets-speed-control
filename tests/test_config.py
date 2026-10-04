@@ -1,5 +1,7 @@
 """Configuration loading, validation and sparse saving."""
 
+import os
+
 import pytest
 
 from iets_speed_control.util import config as cfg
@@ -105,6 +107,9 @@ def test_a_digits_only_serial_stays_a_string(path):
         ("control:\n  max_step: -1\n", "control.max_step"),
         ("device:\n  baudrate: 0\n", "device.baudrate"),
         ("ui:\n  history_window: 0\n", "ui.history_window"),
+        ("sensors:\n  provider: null\n", "sensors.provider"),
+        ("sensors:\n  provider: 42\n", "sensors.provider"),
+        ("sensors:\n  provider: ' '\n", "sensors.provider"),
         ("control:\n  curve: [[50, 40]]\n", "at least two"),
         ("control:\n  curve: [[50, 40], [40, 60]]\n", "strictly increase"),
         ("control:\n  curve: [[50, 40], [50, 60]]\n", "strictly increase"),
@@ -226,29 +231,39 @@ def test_save_creates_the_directory(tmp_path):
 #
 # The window geometry is saved on every minimise and on exit, and most of those save exactly what is
 # already on disk. Rewriting the file each time would spend flash write cycles to change nothing.
+#
+# Each test backdates the file before the second save. Two writes in a row can land on the same
+# timestamp on a fast disk, so comparing the timestamps of two saves cannot tell a rewrite apart.
+
+
+OLD_NS = 1_000_000_000_000_000_000  # 2001-09-09: any rewrite now moves the timestamp away from it
+
+
+def backdate(path):
+    os.utime(path, ns=(OLD_NS, OLD_NS))
 
 
 def test_saving_the_same_configuration_twice_writes_once(path):
     config = cfg.Config()
     config.control.delay = 0.5
     cfg.save(config, path)
-    stamp = path.stat().st_mtime_ns
+    backdate(path)
 
     cfg.save(config, path)
 
-    assert path.stat().st_mtime_ns == stamp, "an unchanged configuration must not be rewritten"
+    assert path.stat().st_mtime_ns == OLD_NS, "an unchanged configuration must not be rewritten"
 
 
 def test_saving_an_actual_change_does_write(path):
     config = cfg.Config()
     config.control.delay = 0.5
     cfg.save(config, path)
-    stamp = path.stat().st_mtime_ns
+    backdate(path)
 
     config.control.delay = 0.75
     cfg.save(config, path)
 
-    assert path.stat().st_mtime_ns != stamp
+    assert path.stat().st_mtime_ns != OLD_NS
     assert "0.75" in path.read_text(encoding="utf-8")
 
 
@@ -257,23 +272,23 @@ def test_a_hand_edited_file_is_left_alone_when_it_already_matches(path):
     path.write_text("control:\n  # tuned by hand\n  delay: 0.5\n", encoding="utf-8")
     config = cfg.load(path)
     cfg.save(config, path)  # normalises once, if at all
-    stamp = path.stat().st_mtime_ns
+    backdate(path)
 
     cfg.save(config, path)
 
-    assert path.stat().st_mtime_ns == stamp
+    assert path.stat().st_mtime_ns == OLD_NS
 
 
 def test_reverting_a_value_to_its_default_is_a_change(path):
     config = cfg.Config()
     config.control.delay = 0.5
     cfg.save(config, path)
-    stamp = path.stat().st_mtime_ns
+    backdate(path)
 
     config.control.delay = cfg.Config().control.delay
     cfg.save(config, path)
 
-    assert path.stat().st_mtime_ns != stamp
+    assert path.stat().st_mtime_ns != OLD_NS
     assert "delay" not in path.read_text(encoding="utf-8"), "back to default means dropped from the file"
 
 

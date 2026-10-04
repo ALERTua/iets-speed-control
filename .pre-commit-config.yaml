@@ -22,6 +22,15 @@ repos:
       # Run the formatter.
       - id: ruff-format
 
+  # Checks every file of [tool.ty.src] in pyproject.toml, not only the changed files
+  - repo: https://github.com/astral-sh/ty-pre-commit
+    rev: v0.0.84
+    hooks:
+      - id: ty
+        args: [--locked]
+        # ty finds the files itself from [tool.ty.src]; listed files would bypass its exclude
+        pass_filenames: false
+
   - repo: local
     hooks:
       - id: pytest

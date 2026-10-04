@@ -356,6 +356,17 @@ def test_a_hand_written_alias_still_gets_the_admin_note(view, unelevated):
     assert view.admin_label.winfo_manager()
 
 
+def test_asking_a_row_for_a_combo_it_does_not_have_is_an_error(view):
+    with pytest.raises(TypeError, match="Temperature source"):
+        row_named(view, "Sensors", "Temperature source").require_combo()
+
+
+def test_a_combo_row_hands_back_its_combo(view):
+    row = row_named(view, "Sensors", "CPU sensor filter")
+
+    assert row.require_combo() is row.combo
+
+
 def test_the_web_server_rows_appear_only_for_that_source(view):
     CONFIG.sensors.provider = "aida64"
     view._apply_lhm_visibility()

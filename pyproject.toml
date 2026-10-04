@@ -23,6 +23,7 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff",
     "rust-just",
+    "ty==0.0.84",  # the same version as the ty hook in .pre-commit-config.yaml
 ]
 
 [tool.uv]
@@ -30,6 +31,10 @@ package = true
 
 [tool.ruff]
 line-length = 120
+
+[tool.ty.src]
+# The tests swap in fakes and wrong values on purpose, so ty checks everything but them.
+exclude = ["tests"]
 
 [project.scripts]
 iets-speed-control = "iets_speed_control.entrypoints.cli:cli"
