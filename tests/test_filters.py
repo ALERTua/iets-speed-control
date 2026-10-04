@@ -74,3 +74,12 @@ def test_an_empty_or_non_text_filter_is_refused(pattern):
 def test_a_broken_expression_is_refused_with_the_reason():
     with pytest.raises(ValueError, match="not a valid regular expression"):
         compile_filter("CPU (")
+
+
+def test_a_filter_is_compiled_once_however_many_ticks_use_it():
+    compile_filter.cache_clear()
+
+    for _ in range(5):
+        select(READINGS, ["CPU", "GPU"])
+
+    assert compile_filter.cache_info().misses == 2

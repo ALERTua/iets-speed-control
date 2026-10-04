@@ -557,16 +557,69 @@ def test_the_list_follows_the_source(view, monkeypatch):
     assert view.filter_list.patterns == ["Core Max"]
 
 
-def test_reset_puts_the_default_filters_back(view):
+def test_reset_puts_the_default_filters_back(view, monkeypatch):
+    from iets_speed_control.sensors import Aida64Provider
+
+    # Reset also puts the source back to aida64, whose read would otherwise reach the real WMI.
+    monkeypatch.setattr(Aida64Provider, "get_temperatures", lambda self: {})
     CONFIG.sensors.filters["fake"] = ["Core Max"]
     view._redisplay_filters()
 
-    for path, refresh in view.sections["Sensors"].bindings:
-        if path == "sensors.filters":
-            cfg.set_value(CONFIG, path, cfg.get_value(cfg.Config(), path))
-            refresh()
+    view._reset_section(view.sections["Sensors"])
 
+    assert CONFIG.sensors.filters == {}
     assert view.filter_list.patterns == ["CPU", "GPU"]
+
+
+def test_a_failed_read_is_reported_on_the_filters_row(view):
+    view._show_sensor_match(False, OSError("connection refused"))
+
+    assert "connection refused" in view.filters_row.error.cget("text")
+
+
+def test_a_source_with_no_readings_is_reported(view):
+    """The loop then drives the fan from 0 °C, so this is the state worth saying out loud."""
+    view._show_sensor_match(True, {})
+
+    assert "No readings" in view.filters_row.error.cget("text")
+
+
+def test_a_filter_typed_and_entered_takes_effect(view):
+    """Enter in the combo box is how a typed filter reaches the configuration."""
+    view.show("Sensors")
+    view.update()
+    view.filter_list.add_filter()
+    combo = view.filter_list.lines[-1].combo
+
+    combo.set("Hot Spot")
+    combo._entry.focus_force()
+    combo.update()
+    combo._entry.event_generate("<Return>")
+    view.update()
+
+    assert CONFIG.sensors.filters["fake"] == ["CPU", "GPU", "Hot Spot"]
+
+
+def test_an_empty_new_line_is_not_shown_as_a_filter_that_matches_nothing(view):
+    from iets_speed_control.gui.filter_list import NO_MATCH
+
+    view.filter_list.add_filter()
+
+    view._show_sensor_match(True, FakeProvider().get_temperatures())
+
+    assert view.filter_list.lines[-1].result.cget("text") != NO_MATCH
+
+
+def test_the_maximum_is_marked_on_the_right_line_when_patterns_repeat_in_the_selection(view):
+    """Lines pair with the matches in order, not by text, so equal texts cannot hide the marker."""
+    from iets_speed_control.util.filters import select
+
+    view.filter_list.set_patterns(["CPU", "CPU"])
+
+    view.filter_list.show_selection(select(FakeProvider().get_temperatures(), ["CPU", "CPU"]))
+
+    marked = ["max" in line.result.cget("text") for line in view.filter_list.lines]
+    assert marked == [True, False]
 
 
 def test_the_filter_list_does_not_widen_the_control_column(view):

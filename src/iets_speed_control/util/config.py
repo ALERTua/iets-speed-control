@@ -20,6 +20,7 @@ from ruamel.yaml import YAML, YAMLError
 from ruamel.yaml.comments import CommentedSeq
 
 from .filters import DEFAULT_FILTERS, compile_filter
+from .source_names import canonical_source
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ class SensorsConfig:
     provider: str = "aida64"
     # The filters of each source, by its code name. A source without an entry uses DEFAULT_FILTERS, so
     # the file only lists the sources whose filters were changed.
-    filters: dict = field(default_factory=dict)
+    filters: dict[str, list[str]] = field(default_factory=dict)
     lhm_web: LhmWebConfig = field(default_factory=LhmWebConfig)
 
 
@@ -177,7 +178,8 @@ def _migrate_legacy_filters(config: Config, legacy: list[str]):
     if legacy == list(DEFAULT_FILTERS):
         return
 
-    provider = config.sensors.provider.strip().lower()
+    # Keyed by the code name, as every reader looks it up: "ohm" in the file means lhm.
+    provider = canonical_source(config.sensors.provider)
     if provider in config.sensors.filters:
         logger.warning(f"Ignoring {', '.join(LEGACY_FILTER_KEYS)}: sensors.filters.{provider} is already set")
         return
@@ -266,6 +268,9 @@ def _validated_filters(filters) -> dict:
                 compile_filter(pattern)
             except ValueError as e:
                 raise ConfigError(f"{key}[{index}]: {e}") from None
+            if patterns.index(pattern) != index:
+                # A repeat selects nothing new, and two equal lines could not say which one holds the maximum.
+                raise ConfigError(f"{key}[{index}]: {pattern!r} is already in the list")
 
         result[str(source)] = [str(pattern) for pattern in patterns]
 
