@@ -1,12 +1,18 @@
 """Sensor provider contract shared by all temperature sources."""
 
 import ctypes
+import re
 import threading
 from typing import Protocol
 
 import pythoncom
 
 _com_state = threading.local()
+
+# Entries some sources file under the Temperature type that are not a temperature measured now:
+# configured limits, a sensor's resolution, and Distance to TjMax, which falls as the chip heats up.
+# All of them come from labels LibreHardwareMonitor reports on real hardware.
+NOT_LIVE = re.compile(r"distance to tjmax|\blimit\b|resolution|warning temperature|critical temperature", re.IGNORECASE)
 
 
 class SensorProvider(Protocol):
@@ -51,6 +57,11 @@ def lacks_admin_rights(provider: SensorProvider | type[SensorProvider] | None) -
     A source that needs administrator rights reports itself by `requires_admin`; the others never do.
     """
     return bool(getattr(provider, "requires_admin", False)) and not is_elevated()
+
+
+def is_live_temperature(label: str) -> bool:
+    """Whether a Temperature entry is a reading of the chip right now, not a limit or a margin."""
+    return not NOT_LIVE.search(label)
 
 
 def to_temperature(value) -> float | None:

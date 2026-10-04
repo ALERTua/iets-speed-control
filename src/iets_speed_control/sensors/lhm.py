@@ -7,7 +7,7 @@ import logging
 
 from wmi import WMI
 
-from .base import ensure_com_initialized, to_temperature
+from .base import ensure_com_initialized, is_live_temperature, to_temperature
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,9 @@ class LibreHardwareMonitorProvider:
             return output
 
         for sensor in sensors:
+            if not is_live_temperature(sensor.Name):
+                continue
+
             temperature = to_temperature(sensor.Value)
             if temperature is None:
                 continue

@@ -189,6 +189,15 @@ def probe_aida64() -> dict[str, float]:
     }
 
 
+# Spelled out here rather than imported from the sensors package, so a wrong entry on either side
+# shows up as a mismatch: the probes stay independent of the code they check.
+NOT_LIVE_MARKERS = ("distance to tjmax", "limit", "resolution", "warning temperature", "critical temperature")
+
+
+def is_live(label: str) -> bool:
+    return not any(marker in label.lower() for marker in NOT_LIVE_MARKERS)
+
+
 def probe_lhm() -> dict[str, float]:
     for namespace in ("root\\LibreHardwareMonitor", "root\\OpenHardwareMonitor"):
         try:
@@ -198,7 +207,7 @@ def probe_lhm() -> dict[str, float]:
             continue
 
         if sensors:
-            return {s.Name: float(s.Value) for s in sensors}
+            return {s.Name: float(s.Value) for s in sensors if is_live(s.Name)}
 
     return {}
 
@@ -220,7 +229,7 @@ def probe_lhm_web() -> dict[str, float]:
             stack.extend((child, trail + [node.get("Text", "")]) for child in children)
             continue
 
-        if node.get("Type") != "Temperature":
+        if node.get("Type") != "Temperature" or not is_live(node.get("Text", "")):
             continue
 
         number = str(node.get("Value", "")).split()[0].replace(",", ".")
