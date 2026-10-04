@@ -161,3 +161,22 @@ cython_debug/
 #.idea/
 .idea
 plans/
+
+# ruff and pytest put a .gitignore into their own caches; named here for tools that ignore it
+.ruff_cache/
+
+# VS Code
+.vscode/
+
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+
+# Claude Code: git worktrees of agent sessions and personal settings. Shared .claude/ files stay tracked.
+.claude/worktrees/
+.claude/settings.local.json
