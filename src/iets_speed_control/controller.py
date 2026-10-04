@@ -15,6 +15,10 @@ from .util.tools import MedianSmoother, calculate_dimmer_value, curve_to_ranges
 
 logger = logging.getLogger(__name__)
 
+# Seconds to wait after the loop's own bookkeeping failed. Fixed, because the configured delay may be
+# what failed.
+RETRY_DELAY = 1.0
+
 
 class Mode(Enum):
     """Control mode for the fan speed."""
@@ -52,6 +56,10 @@ class SpeedController:
         # Whether the temperature source answered at all. A provider that cannot reach its app
         # returns no readings rather than raising, which would otherwise look like a cold machine.
         self._sensors_ok = True
+        # Whether the previous tick raised, so a lasting fault is reported once rather than every tick.
+        self._tick_failing = False
+        # The same for a fault outside the tick, in the loop's own reporting or waiting.
+        self._iteration_failing = False
 
         # The value we last wrote is the source of truth; the device is only re-read on
         # (re)connect and every RESYNC_EVERY ticks, to catch changes made outside this app.
@@ -223,7 +231,7 @@ class SpeedController:
     def _notify_status(self):
         """Notify status change callback."""
         if self._on_status_change:
-            self._on_status_change(self._connected, self._running, self._sensors_ok)
+            self._on_status_change(self._connected, self._running, self._sensors_ok, self.loop_ok)
 
     def _notify_temps(self):
         """Notify temperature change callback."""
@@ -349,94 +357,169 @@ class SpeedController:
         return await self._connect()
 
     async def _control_loop(self):
-        """Main control loop."""
+        """Run one tick every control.delay until stopped.
+
+        An unexpected error costs the tick it happened in, never the loop. A loop that ended here
+        would leave the fan at whatever speed it last had, with `running` still true so that nothing
+        could start it again short of restarting the app.
+        """
         try:
             while self._running:
-                # Attempt connection if not connected
-                if not self.device.connected:
-                    await self._connect()
-
-                if self.device.connected:
-                    self._connected = True
-
-                    # Read temperatures. WMI is blocking, so keep it off the event loop.
-                    try:
-                        sensors = await asyncio.to_thread(self.sensors.get_temperatures)
-                    except Exception as e:  # noqa: BLE001 -- WMI/COM raise arbitrary types; never kill the loop
-                        logger.error(f"Error reading sensors: {e}")
-                        self._set_sensors_ok(False)
-                        await asyncio.sleep(CONFIG.control.delay)
-                        continue
-
-                    # An empty result is how every provider reports "I cannot reach my app".
-                    self._set_sensors_ok(bool(sensors))
-
-                    cpu_temps = [v for k, v in sensors.items() if CONFIG.sensors.cpu_filter in k]
-                    gpu_temps = [v for k, v in sensors.items() if CONFIG.sensors.gpu_filter in k]
-
-                    # Round rather than truncate: sources such as the LibreHardwareMonitor web
-                    # server report fractions, and int() would bias every reading downwards.
-                    raw_cpu = max(cpu_temps or [0])
-                    raw_gpu = max(gpu_temps or [0])
-                    self._cpu_temp = round(self._cpu_smoother.add(raw_cpu))
-                    self._gpu_temp = round(self._gpu_smoother.add(raw_gpu))
-                    if (raw_cpu, raw_gpu) != (self._cpu_temp, self._gpu_temp):
-                        logger.debug(
-                            f"Smoothed CPU {raw_cpu} -> {self._cpu_temp}, GPU {raw_gpu} -> {self._gpu_temp}"
-                            f" (median of {self._temp_window})"
-                        )
-                    self._notify_temps()
-
-                    current_dimmer = await self._current_dimmer()
-
-                    # Calculate new speed based on mode
-                    if self._mode == Mode.AUTO:
-                        ranges = self._ranges  # read once: the GUI may swap it mid-tick
-                        cpu_dimmer = calculate_dimmer_value(self._cpu_temp, ranges)
-                        gpu_dimmer = calculate_dimmer_value(self._gpu_temp, ranges)
-                        new_value = max(cpu_dimmer, gpu_dimmer)
-
-                        # Apply step limits
-                        if current_dimmer is not None and CONFIG.control.max_step:
-                            new_value = max(new_value, current_dimmer - CONFIG.control.max_step)
-
-                        # Apply minimum change threshold
-                        if (
-                            current_dimmer is not None
-                            and abs(current_dimmer - new_value) < CONFIG.control.ignore_less_than
-                        ):
-                            new_value = current_dimmer
-                    else:
-                        # Manual mode
-                        new_value = self._manual_speed
-
-                    # Update speed if changed
-                    if current_dimmer != new_value:
-                        logger.info(
-                            f"CPU: {self._cpu_temp}, GPU: {self._gpu_temp}. "
-                            f"{CONFIG.device.pwm_command}: {current_dimmer} -> {new_value}"
-                        )
-                        await self._set_fan_speed(new_value)
-                    elif current_dimmer is not None:
-                        self._current_speed = current_dimmer
-                        self._notify_speed()
+                # Everything an iteration does sits under this guard, the reporting and the wait
+                # included: the status callback runs GUI code, and nothing may end the loop but stop().
+                try:
+                    await self._run_tick()
+                    await asyncio.sleep(CONFIG.control.delay)
+                except Exception as e:  # noqa: BLE001 -- the last line of defence for the loop itself
+                    self._iteration_failed(e)
+                    await asyncio.sleep(RETRY_DELAY)
                 else:
-                    self._connected = False
-                    # Forget the cached value so the next connection re-reads the real one.
-                    self._last_sent = None
-                    self._ticks_since_resync = 0
-                    self._notify_status()
-
-                await asyncio.sleep(CONFIG.control.delay)
+                    self._iteration_succeeded()
 
         except asyncio.CancelledError:
             logger.debug("Control loop cancelled")
             raise
-        except Exception:
-            # Last-resort guard: log with the traceback rather than let the loop die silently.
-            logger.exception("Error in control loop")
+
+    def _iteration_failed(self, error: Exception):
+        """Report a fault outside the tick once with its traceback, like a tick fault."""
+        if self._iteration_failing:
+            logger.debug(f"Control loop failed again: {error!r}")
+            return
+
+        self._iteration_failing = True
+        logger.error(f"Error in the control loop itself; retrying every {RETRY_DELAY} s", exc_info=error)
+
+    def _iteration_succeeded(self):
+        if self._iteration_failing:
+            self._iteration_failing = False
+            logger.info("Control loop itself is working again")
+
+    async def _run_tick(self):
+        """Run one tick and report how it went."""
+        try:
+            await self._tick()
+        except Exception as e:  # noqa: BLE001 -- whatever a tick raises, the next tick must still run
+            self._tick_failed(e)
+        else:
+            self._tick_succeeded()
+
+    @property
+    def loop_ok(self) -> bool:
+        """Whether the last tick ran without an unexpected error."""
+        return not self._tick_failing
+
+    def _tick_failed(self, error: Exception):
+        """Report a failing tick once with its traceback, not once a second for as long as it fails.
+
+        The link state stays what the device says: a fault in the sensors or in the GUI says nothing
+        about the serial port, and the status carries the fault on its own.
+        """
+        if self._tick_failing:
+            logger.debug(f"Control tick failed again: {error!r}")
+            return
+
+        self._tick_failing = True
+        logger.error("Error in control loop; skipping this tick and trying again", exc_info=error)
+        self._notify_status()
+
+    def _tick_succeeded(self):
+        """A tick that ran to its end without an unexpected error ends a fault.
+
+        It may still have skipped its work, for a source with no temperatures for one; that is reported
+        through the sensor status, not as a loop fault.
+        """
+        if self._tick_failing:
+            self._tick_failing = False
+            logger.info("Control loop is working again")
+            self._notify_status()  # the failure turned the tray red; this turns it back
+
+    def _forget_device_value(self):
+        """Drop the cached dimmer value so the next exchange reads the real one."""
+        self._last_sent = None
+        self._ticks_since_resync = 0
+
+    async def _tick(self):
+        """Read the temperatures once and bring the fan to the speed they call for."""
+        # Attempt connection if not connected
+        if not self.device.connected:
+            await self._connect()
+
+        if not self.device.connected:
             self._connected = False
+            # Forget the cached value so the next connection re-reads the real one.
+            self._forget_device_value()
             self._notify_status()
+            return
+
+        self._connected = True
+
+        # Read temperatures. WMI is blocking, so keep it off the event loop.
+        try:
+            sensors = await asyncio.to_thread(self.sensors.get_temperatures)
+        except Exception as e:  # noqa: BLE001 -- WMI/COM raise arbitrary types; a source error is not a loop error
+            logger.error(f"Error reading sensors: {e}")
+            self._set_sensors_ok(False)
+            return
+
+        # An empty result is how every provider reports "I cannot reach my app".
+        self._set_sensors_ok(bool(sensors))
+
+        cpu_temps = [v for k, v in sensors.items() if CONFIG.sensors.cpu_filter in k]
+        gpu_temps = [v for k, v in sensors.items() if CONFIG.sensors.gpu_filter in k]
+
+        # Round rather than truncate: sources such as the LibreHardwareMonitor web
+        # server report fractions, and int() would bias every reading downwards.
+        raw_cpu = max(cpu_temps or [0])
+        raw_gpu = max(gpu_temps or [0])
+        self._cpu_temp = round(self._cpu_smoother.add(raw_cpu))
+        self._gpu_temp = round(self._gpu_smoother.add(raw_gpu))
+        if (raw_cpu, raw_gpu) != (self._cpu_temp, self._gpu_temp):
+            logger.debug(
+                f"Smoothed CPU {raw_cpu} -> {self._cpu_temp}, GPU {raw_gpu} -> {self._gpu_temp}"
+                f" (median of {self._temp_window})"
+            )
+        self._notify_temps()
+
+        try:
+            await self._drive_fan()
+        except Exception:
+            # The device was in the middle of an exchange, so its state is unknown: the next tick reads
+            # it again. A fault anywhere else keeps the cached value and spares the serial round trip.
+            self._forget_device_value()
+            raise
+
+    async def _drive_fan(self):
+        """Bring the fan to the speed the current temperatures, or Manual mode, call for."""
+        current_dimmer = await self._current_dimmer()
+
+        # Calculate new speed based on mode
+        if self._mode == Mode.AUTO:
+            ranges = self._ranges  # read once: the GUI may swap it mid-tick
+            cpu_dimmer = calculate_dimmer_value(self._cpu_temp, ranges)
+            gpu_dimmer = calculate_dimmer_value(self._gpu_temp, ranges)
+            new_value = max(cpu_dimmer, gpu_dimmer)
+
+            # Apply step limits
+            if current_dimmer is not None and CONFIG.control.max_step:
+                new_value = max(new_value, current_dimmer - CONFIG.control.max_step)
+
+            # Apply minimum change threshold
+            if current_dimmer is not None and abs(current_dimmer - new_value) < CONFIG.control.ignore_less_than:
+                new_value = current_dimmer
+        else:
+            # Manual mode
+            new_value = self._manual_speed
+
+        # Update speed if changed
+        if current_dimmer != new_value:
+            logger.info(
+                f"CPU: {self._cpu_temp}, GPU: {self._gpu_temp}. "
+                f"{CONFIG.device.pwm_command}: {current_dimmer} -> {new_value}"
+            )
+            await self._set_fan_speed(new_value)
+        elif current_dimmer is not None:
+            self._current_speed = current_dimmer
+            self._notify_speed()
 
     async def shutdown(self):
         """Shutdown the controller gracefully."""
