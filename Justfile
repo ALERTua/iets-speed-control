@@ -8,6 +8,14 @@ set shell := ["powershell", "-c"]
 #set windows-shell := ["powershell.exe", "-NoLogo", "-Command"]
 set windows-shell := ["cmd.exe", "/c"]
 
+# The tray app with its window
+gui:
+    uv run iets-speed-control-gui
+
+# The console version: prints every reading and every change to the fan
+cli:
+    uv run iets-speed-control
+
 lint:
     uv run ruff format .
     uv run ruff check --fix

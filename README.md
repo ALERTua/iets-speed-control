@@ -139,7 +139,7 @@ Everything is optional: without a config file the app runs on its defaults.
 
 #### GUI
 
-- Run `uv run iets-speed-control-gui`
+- Run `just gui`, or `uv run iets-speed-control-gui` without just
 - **Home** shows the connection state, the maximum the filters match, the fan speed, every filter with its current reading and sensor (the one giving the maximum is marked with ▶, one matching nothing is red), and a history graph of the maximum
   (ten minutes by default, adjustable in Settings -> Display)
 - **Settings** covers every configuration key, one card per section, with a search box across them:
@@ -165,7 +165,7 @@ Everything is optional: without a config file the app runs on its defaults.
 
 #### Console
 
-- Run `uv run iets-speed-control`
+- Run `just cli`, or `uv run iets-speed-control` without just
 
 #### Running it without cloning
 
