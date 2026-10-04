@@ -753,3 +753,24 @@ def test_switching_the_source_clears_the_old_verdict_at_once(view, monkeypatch):
     choose(row_named(view, "Sensors", "Temperature source"), "LibreHardwareMonitor (web server)")
 
     assert not view.filters_row.error.winfo_manager()
+
+
+def test_redisplaying_the_list_reuses_its_lines_and_clears_old_results(view):
+    """Rebuilding a combo box costs tens of milliseconds, and most redisplays only change text."""
+    view._show_sensor_match(True, FakeProvider().get_temperatures())
+    before = list(view.filter_list.lines)
+
+    view.filter_list.set_patterns(["GPU", "CPU"])
+
+    assert view.filter_list.lines == before
+    assert view.filter_list.patterns == ["GPU", "CPU"]
+    assert all(line.result.cget("text") == "" for line in view.filter_list.lines), "old results describe old filters"
+
+
+def test_redisplaying_a_shorter_or_longer_list_adds_and_removes_lines(view):
+    view.filter_list.set_patterns(["CPU"])
+    assert view.filter_list.patterns == ["CPU"]
+
+    view.filter_list.set_patterns(["CPU", "GPU", "Hot Spot"])
+
+    assert view.filter_list.patterns == ["CPU", "GPU", "Hot Spot"]

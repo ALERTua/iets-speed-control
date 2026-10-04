@@ -66,13 +66,14 @@ builds `"<hardware>/<sensor>"` because bare sensor names are neither.
 
 ## Tests
 
-`just test` runs everything serially (~25 s). `just test-fast` runs everything that needs no Tk root
-in parallel (~2 s) — the loop to use while editing non-GUI code. `just test-e2e` needs AIDA64 or
-LibreHardwareMonitor actually running.
+`just test` runs everything the way pre-commit and CI do, `-n 4 --dist loadfile` (~12 s; serial
+~16 s). `just test-fast` runs everything that needs no Tk root in parallel (~2 s) — the loop to use
+while editing non-GUI code. `just test-e2e` needs AIDA64 or LibreHardwareMonitor actually running.
 
-- The `gui` marker is applied automatically to any test that requests `tk_root`. GUI tests are kept
-  out of parallel runs: each xdist worker builds its own Tk root, and `-n auto` on 32 cores measured
-  **3× slower** than serial.
+- The `gui` marker is applied automatically to any test that requests `tk_root`. Parallel runs use
+  `--dist loadfile`: each worker builds its own Tk root and module-scoped panels, so a file must stay
+  on one worker. `-n auto` on 32 cores with the default distribution measured **3× slower** than
+  serial. `test_gui_settings.py` is the longest file (~5 s) and sets the floor of a parallel run.
 - **One session-scoped Tk root** (`tk_root`), mapped with `-alpha 0.0`. A withdrawn window receives no
   synthesized events, and creating a second root after the first is destroyed fails outright.
 - **Panels are module-scoped and reset per test** (`settings_view` + `view` in `conftest.py`).

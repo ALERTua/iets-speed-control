@@ -305,11 +305,15 @@ class SettingsView(ctk.CTkFrame):
         # Only clear when there is text: CTkEntry drops its placeholder on an empty delete().
         if self.search.get():
             self.search.delete(0, "end")
-        for section in self.sections.values():
-            section.holder.pack_forget()
 
         section = self.sections[name]
-        section.holder.pack(fill="both", expand=True)
+        # Repacking makes Tk lay out and redraw the whole scrollable body, so a section that is already
+        # the only one on screen is left where it is.
+        alone = all(bool(other.holder.winfo_manager()) == (other is section) for other in self.sections.values())
+        if not alone:
+            for other in self.sections.values():
+                other.holder.pack_forget()
+            section.holder.pack(fill="both", expand=True)
         self.active = name
         if section.on_show:
             section.on_show()

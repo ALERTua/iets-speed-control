@@ -46,9 +46,9 @@ def pytest_collection_modifyitems(items):
     """Mark every test that needs the shared Tk root as a GUI test.
 
     Derived from the fixtures a test asks for rather than written by hand, so a new widget test is
-    marked whether or not its author remembers to. The marker exists so the GUI tests can be kept
-    out of a parallel run: each xdist worker would build its own Tk root and rebuild the
-    module-scoped panels, which measured slower than running them serially.
+    marked whether or not its author remembers to. `just test-fast` uses the marker to leave the GUI
+    tests out; the full parallel run keeps each file on one worker (--dist loadfile) instead, so a
+    worker builds a module's panel only once.
     """
     for item in items:
         if "tk_root" in getattr(item, "fixturenames", ()):

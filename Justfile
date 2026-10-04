@@ -26,14 +26,14 @@ pre:
 sync:
     uv sync --dev
 
-# The whole suite, serial: about 25 s, of which the GUI tests are roughly 22 s.
+# The whole suite, the way pre-commit and CI run it: four workers, one test file each at a time,
+# so every file builds its GUI panel once in its own worker. About 12 s; serial takes about 16 s.
 test:
-    uv run pytest
+    uv run pytest -n 4 --dist loadfile
 
 # Everything that does not need a Tk root, in parallel: about 2 s. This is the loop to use while
-# editing non-GUI code. Note that the workers are worth ~0.3 s of that; skipping the GUI tests is
-# what makes it quick. "-n auto" is deliberately not used -- 32 workers each build their own Tk root
-# and rebuild the module-scoped panels, which measured 3x SLOWER than serial on the full suite.
+# editing non-GUI code; skipping the GUI tests is what makes it quick. "-n auto" is deliberately
+# not used anywhere -- 32 workers each build their own Tk root and rebuild the module-scoped panels.
 test-fast:
     uv run pytest -m "not gui and not e2e" -n 8
 

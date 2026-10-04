@@ -35,7 +35,9 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: uv run pytest
+        # Four workers, one test file each at a time: every file builds its GUI panel once in its
+        # own worker. Measured 12 s against 16 s serial, and stable over ten runs.
+        entry: uv run pytest -n 4 --dist loadfile
         language: system
         types: [python]
         pass_filenames: false

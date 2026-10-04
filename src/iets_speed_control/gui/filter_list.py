@@ -83,11 +83,18 @@ class FilterList(ctk.CTkFrame):
         return [line.pattern for line in self.lines if line.pattern]
 
     def set_patterns(self, patterns: Sequence[str]):
-        """Show a list that is already committed, for example after the source changed."""
-        for line in self.lines:
+        """Show a list that is already committed, for example after the source changed.
+
+        Existing lines are reused and only the surplus is destroyed or the shortfall added: building and
+        tearing down a combo box costs tens of milliseconds in Tcl, and most calls change only text.
+        """
+        for line in self.lines[len(patterns) :]:
             line.destroy()
-        self.lines = []
-        for pattern in patterns:
+        del self.lines[len(patterns) :]
+        for line, pattern in zip(self.lines, patterns, strict=False):
+            line.combo.set(pattern)
+            line.clear()
+        for pattern in patterns[len(self.lines) :]:
             self._add_line(pattern)
         self._committed = list(patterns)
 
