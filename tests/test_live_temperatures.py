@@ -29,6 +29,9 @@ NOT_LIVE = [
     "Thermal Sensor Critical High Limit",
     "Warning Temperature",
     "Critical Temperature",
+    # Case and plural forms: the rule is a case-insensitive substring match, like the e2e probe's.
+    "thermal sensor high limit",
+    "Thermal Sensor Low Limits",
 ]
 
 
@@ -114,3 +117,39 @@ def test_the_wmi_source_drops_what_is_not_a_reading(monkeypatch):
     monkeypatch.setattr(lhm, "ensure_com_initialized", lambda: None)
 
     assert lhm.LibreHardwareMonitorProvider().get_temperatures() == {"Core Max": 87.0}
+
+
+@pytest.mark.parametrize("label", [None, 42])
+def test_a_missing_or_odd_label_does_not_raise(label):
+    """The label comes from another program; one odd entry must not fail the whole poll."""
+    assert is_live_temperature(label)
+
+
+def test_the_web_source_skips_past_a_node_without_a_name():
+    document = {
+        "Text": "Sensor",
+        "Children": [
+            {
+                "Text": "PC",
+                "Children": [
+                    {
+                        "Text": "CPU",
+                        "Children": [
+                            {
+                                "Text": "Temperatures",
+                                "Children": [
+                                    {"Text": None, "Type": "Temperature", "Value": "50,0 °C"},
+                                    {"Text": "Core Max", "Type": "Temperature", "Value": "87,0 °C"},
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    found: dict[str, float] = {}
+
+    LibreHardwareMonitorWebProvider()._collect(document, [], found)
+
+    assert found["CPU/Core Max"] == 87.0
