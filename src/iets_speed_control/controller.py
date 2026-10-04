@@ -5,15 +5,18 @@ import logging
 from collections.abc import Callable
 from enum import Enum
 
-from serial.tools.list_ports_common import ListPortInfo
-from serial.tools.list_ports_windows import comports
-
-from .entities.dimmer import Dimmer
+from .entities.fan import FanDevice
+from .entities.tasmota_fan import create_fan
 from .sensors import SensorProvider, create_provider
-from .util.config import CONFIG
+from .util.config import CONFIG, filters_for
+from .util.filters import Selection, select
 from .util.tools import MedianSmoother, calculate_dimmer_value, curve_to_ranges
 
 logger = logging.getLogger(__name__)
+
+# Seconds to wait after the loop's own bookkeeping failed. Fixed, because the configured delay may be
+# what failed.
+RETRY_DELAY = 1.0
 
 
 class Mode(Enum):
@@ -27,12 +30,12 @@ class SpeedController:
     """
     Manages fan speed control with auto and manual modes.
 
-    In AUTO mode, fan speed is calculated from CPU/GPU temperatures.
+    In AUTO mode, fan speed follows the hottest reading the source's filters match.
     In MANUAL mode, fan speed is set directly by the user.
     """
 
     def __init__(self, sensor_provider: SensorProvider | None = None):
-        self.device = Dimmer()
+        self.device: FanDevice = create_fan()
         self._sensors = sensor_provider or create_provider(CONFIG.sensors.provider)
         self._mode = Mode(CONFIG.control.mode)  # validated on load, so this cannot raise here
         self._manual_speed = CONFIG.control.manual_speed
@@ -45,13 +48,18 @@ class SpeedController:
         self._on_speed_change: Callable | None = None
 
         # Current status
-        self._cpu_temp = 0
-        self._gpu_temp = 0
+        # The smoothed maximum drives the curve; the selection says which filter and sensor gave it.
+        self._max_temp = 0
+        self._selection = Selection()
         self._current_speed = 0
         self._connected = False
         # Whether the temperature source answered at all. A provider that cannot reach its app
         # returns no readings rather than raising, which would otherwise look like a cold machine.
         self._sensors_ok = True
+        # Whether the previous tick raised, so a lasting fault is reported once rather than every tick.
+        self._tick_failing = False
+        # The same for a fault outside the tick, in the loop's own reporting or waiting.
+        self._iteration_failing = False
 
         # The value we last wrote is the source of truth; the device is only re-read on
         # (re)connect and every RESYNC_EVERY ticks, to catch changes made outside this app.
@@ -59,8 +67,7 @@ class SpeedController:
         self._ticks_since_resync = 0
 
         self._temp_window = max(1, int(CONFIG.control.temp_window))
-        self._cpu_smoother = MedianSmoother(self._temp_window)
-        self._gpu_smoother = MedianSmoother(self._temp_window)
+        self._smoother = MedianSmoother(self._temp_window)
 
         # The curve is editable at runtime from the GUI. Configuration only seeds it.
         self._curve = [(float(temperature), float(percent)) for temperature, percent in CONFIG.control.curve]
@@ -122,14 +129,14 @@ class SpeedController:
         self._notify_status()
 
     @property
-    def cpu_temp(self) -> int:
-        """Current CPU temperature."""
-        return self._cpu_temp
+    def max_temp(self) -> int:
+        """The smoothed hottest reading the filters match: what the curve is evaluated at."""
+        return self._max_temp
 
     @property
-    def gpu_temp(self) -> int:
-        """Current GPU temperature."""
-        return self._gpu_temp
+    def selection(self) -> Selection:
+        """Every filter's latest raw match, and which one holds the maximum."""
+        return self._selection
 
     @property
     def current_speed(self) -> int:
@@ -195,18 +202,17 @@ class SpeedController:
         self._reset_smoothers()
         logger.debug(f"Smoothing window is now {size}")
 
-    def _reset_smoothers(self):
-        """Fresh smoothers sized to the current window.
+    def _describe_hottest(self) -> str:
+        hottest = self._selection.hottest
+        return f"{hottest.label} via {hottest.pattern!r}" if hottest else "no filter matched"
 
-        Both are replaced one after the other rather than atomically: a tick landing in between
-        sees one new and one old smoother, which costs nothing because they are independent.
-        """
-        self._cpu_smoother = MedianSmoother(self._temp_window)
-        self._gpu_smoother = MedianSmoother(self._temp_window)
+    def _reset_smoothers(self):
+        """A fresh smoother sized to the current window, published with a single assignment."""
+        self._smoother = MedianSmoother(self._temp_window)
 
     @property
     def port(self) -> str | None:
-        """Current serial port."""
+        """Where the fan device is reached, as shown to the user."""
         return self.device.port
 
     def set_callbacks(
@@ -223,12 +229,12 @@ class SpeedController:
     def _notify_status(self):
         """Notify status change callback."""
         if self._on_status_change:
-            self._on_status_change(self._connected, self._running, self._sensors_ok)
+            self._on_status_change(self._connected, self._running, self._sensors_ok, self.loop_ok)
 
     def _notify_temps(self):
         """Notify temperature change callback."""
         if self._on_temps_change:
-            self._on_temps_change(self._cpu_temp, self._gpu_temp)
+            self._on_temps_change(self._max_temp, self._selection)
 
     def _notify_speed(self):
         """Notify speed change callback."""
@@ -267,7 +273,7 @@ class SpeedController:
     async def _set_fan_speed(self, value: int):
         """Set the fan speed on the device."""
         if self.device.connected:
-            await self.device.set_dimmer_value(value)
+            await self.device.set_speed(value)
             self._last_sent = value
             self._current_speed = value
             self._notify_speed()
@@ -286,44 +292,22 @@ class SpeedController:
             return self._last_sent
 
         self._ticks_since_resync = 0
-        reported = await self.device.read_dimmer_value()
+        reported = await self.device.read_speed()
         if reported is None:
             return self._last_sent
 
         if self._last_sent is not None and reported != self._last_sent:
-            logger.warning(f"{CONFIG.device.pwm_command} changed outside this app: {self._last_sent} -> {reported}")
+            logger.warning(f"Fan speed changed outside this app: {self._last_sent} -> {reported}")
 
         self._last_sent = reported
         return reported
 
     async def _connect(self) -> bool:
-        """Attempt to connect to the device."""
+        """Open the fan device; finding it, when it moved, is the device's own business."""
         if self.device.connected:
             return True
 
-        # Try direct connection first
         await self.device.connect()
-        if self.device.connected:
-            self._connected = True
-            self._notify_status()
-            return True
-
-        # Try to find device by name or serial
-        coms: list[ListPortInfo] = comports()
-        coms_match = []
-
-        if CONFIG.device.name:
-            coms_match = [_ for _ in coms if CONFIG.device.name in _.description]
-
-        if CONFIG.device.serial:
-            coms_match = [_ for _ in coms if _.serial_number and CONFIG.device.serial in _.serial_number] or coms_match
-
-        if coms_match:
-            com = coms_match[0]
-            self.device.port = com.device
-            logger.info(f"Serial Device found at {self.device.port}")
-            await self.device.connect()
-
         self._connected = self.device.connected
         self._notify_status()
         return self._connected
@@ -331,112 +315,181 @@ class SpeedController:
     async def reconnect(self) -> bool:
         """Close the port and open it again from the current device configuration.
 
-        Port, baudrate, timeout and the PWM command name are read when the Dimmer is built, so a
-        change to any of them needs a new device rather than a new connection. This runs on the
-        asyncio thread: call it from the GUI with asyncio.run_coroutine_threadsafe.
+        The device reads its settings (for Tasmota: port, baudrate, timeout, PWM command) when it is
+        built, so a change to any of them needs a new device rather than a new connection. This runs
+        on the asyncio thread: call it from the GUI with asyncio.run_coroutine_threadsafe.
         """
         if self.device.connected:
             await self.device.disconnect()
 
-        self.device = Dimmer()
+        self.device = create_fan()
         # Whatever the previous device reported says nothing about this one.
         self._last_sent = None
         self._ticks_since_resync = 0
         self._connected = False
         self._notify_status()
 
-        logger.info(f"Reconnecting to {self.device.port} at {self.device.baudrate} baud")
+        logger.info(f"Reconnecting to {self.device.describe()}")
         return await self._connect()
 
     async def _control_loop(self):
-        """Main control loop."""
+        """Run one tick every control.delay until stopped.
+
+        An unexpected error costs the tick it happened in, never the loop. A loop that ended here
+        would leave the fan at whatever speed it last had, with `running` still true so that nothing
+        could start it again short of restarting the app.
+        """
         try:
             while self._running:
-                # Attempt connection if not connected
-                if not self.device.connected:
-                    await self._connect()
-
-                if self.device.connected:
-                    self._connected = True
-
-                    # Read temperatures. WMI is blocking, so keep it off the event loop.
-                    try:
-                        sensors = await asyncio.to_thread(self.sensors.get_temperatures)
-                    except Exception as e:  # noqa: BLE001 -- WMI/COM raise arbitrary types; never kill the loop
-                        logger.error(f"Error reading sensors: {e}")
-                        self._set_sensors_ok(False)
-                        await asyncio.sleep(CONFIG.control.delay)
-                        continue
-
-                    # An empty result is how every provider reports "I cannot reach my app".
-                    self._set_sensors_ok(bool(sensors))
-
-                    cpu_temps = [v for k, v in sensors.items() if CONFIG.sensors.cpu_filter in k]
-                    gpu_temps = [v for k, v in sensors.items() if CONFIG.sensors.gpu_filter in k]
-
-                    # Round rather than truncate: sources such as the LibreHardwareMonitor web
-                    # server report fractions, and int() would bias every reading downwards.
-                    raw_cpu = max(cpu_temps or [0])
-                    raw_gpu = max(gpu_temps or [0])
-                    self._cpu_temp = round(self._cpu_smoother.add(raw_cpu))
-                    self._gpu_temp = round(self._gpu_smoother.add(raw_gpu))
-                    if (raw_cpu, raw_gpu) != (self._cpu_temp, self._gpu_temp):
-                        logger.debug(
-                            f"Smoothed CPU {raw_cpu} -> {self._cpu_temp}, GPU {raw_gpu} -> {self._gpu_temp}"
-                            f" (median of {self._temp_window})"
-                        )
-                    self._notify_temps()
-
-                    current_dimmer = await self._current_dimmer()
-
-                    # Calculate new speed based on mode
-                    if self._mode == Mode.AUTO:
-                        ranges = self._ranges  # read once: the GUI may swap it mid-tick
-                        cpu_dimmer = calculate_dimmer_value(self._cpu_temp, ranges)
-                        gpu_dimmer = calculate_dimmer_value(self._gpu_temp, ranges)
-                        new_value = max(cpu_dimmer, gpu_dimmer)
-
-                        # Apply step limits
-                        if current_dimmer is not None and CONFIG.control.max_step:
-                            new_value = max(new_value, current_dimmer - CONFIG.control.max_step)
-
-                        # Apply minimum change threshold
-                        if (
-                            current_dimmer is not None
-                            and abs(current_dimmer - new_value) < CONFIG.control.ignore_less_than
-                        ):
-                            new_value = current_dimmer
-                    else:
-                        # Manual mode
-                        new_value = self._manual_speed
-
-                    # Update speed if changed
-                    if current_dimmer != new_value:
-                        logger.info(
-                            f"CPU: {self._cpu_temp}, GPU: {self._gpu_temp}. "
-                            f"{CONFIG.device.pwm_command}: {current_dimmer} -> {new_value}"
-                        )
-                        await self._set_fan_speed(new_value)
-                    elif current_dimmer is not None:
-                        self._current_speed = current_dimmer
-                        self._notify_speed()
+                # Everything an iteration does sits under this guard, the reporting and the wait
+                # included: the status callback runs GUI code, and nothing may end the loop but stop().
+                try:
+                    await self._run_tick()
+                    await asyncio.sleep(CONFIG.control.delay)
+                except Exception as e:  # noqa: BLE001 -- the last line of defence for the loop itself
+                    self._iteration_failed(e)
+                    await asyncio.sleep(RETRY_DELAY)
                 else:
-                    self._connected = False
-                    # Forget the cached value so the next connection re-reads the real one.
-                    self._last_sent = None
-                    self._ticks_since_resync = 0
-                    self._notify_status()
-
-                await asyncio.sleep(CONFIG.control.delay)
+                    self._iteration_succeeded()
 
         except asyncio.CancelledError:
             logger.debug("Control loop cancelled")
             raise
-        except Exception:
-            # Last-resort guard: log with the traceback rather than let the loop die silently.
-            logger.exception("Error in control loop")
+
+    def _iteration_failed(self, error: Exception):
+        """Report a fault outside the tick once with its traceback, like a tick fault."""
+        if self._iteration_failing:
+            logger.debug(f"Control loop failed again: {error!r}")
+            return
+
+        self._iteration_failing = True
+        logger.error(f"Error in the control loop itself; retrying every {RETRY_DELAY} s", exc_info=error)
+
+    def _iteration_succeeded(self):
+        if self._iteration_failing:
+            self._iteration_failing = False
+            logger.info("Control loop itself is working again")
+
+    async def _run_tick(self):
+        """Run one tick and report how it went."""
+        try:
+            await self._tick()
+        except Exception as e:  # noqa: BLE001 -- whatever a tick raises, the next tick must still run
+            self._tick_failed(e)
+        else:
+            self._tick_succeeded()
+
+    @property
+    def loop_ok(self) -> bool:
+        """Whether the last tick ran without an unexpected error."""
+        return not self._tick_failing
+
+    def _tick_failed(self, error: Exception):
+        """Report a failing tick once with its traceback, not once a second for as long as it fails.
+
+        The link state stays what the device says: a fault in the sensors or in the GUI says nothing
+        about the serial port, and the status carries the fault on its own.
+        """
+        if self._tick_failing:
+            logger.debug(f"Control tick failed again: {error!r}")
+            return
+
+        self._tick_failing = True
+        logger.error("Error in control loop; skipping this tick and trying again", exc_info=error)
+        self._notify_status()
+
+    def _tick_succeeded(self):
+        """A tick that ran to its end without an unexpected error ends a fault.
+
+        It may still have skipped its work, for a source with no temperatures for one; that is reported
+        through the sensor status, not as a loop fault.
+        """
+        if self._tick_failing:
+            self._tick_failing = False
+            logger.info("Control loop is working again")
+            self._notify_status()  # the failure turned the tray red; this turns it back
+
+    def _forget_device_value(self):
+        """Drop the cached dimmer value so the next exchange reads the real one."""
+        self._last_sent = None
+        self._ticks_since_resync = 0
+
+    async def _tick(self):
+        """Read the temperatures once and bring the fan to the speed they call for."""
+        # Attempt connection if not connected
+        if not self.device.connected:
+            await self._connect()
+
+        if not self.device.connected:
             self._connected = False
+            # Forget the cached value so the next connection re-reads the real one.
+            self._forget_device_value()
             self._notify_status()
+            return
+
+        self._connected = True
+
+        # Read temperatures. WMI is blocking, so keep it off the event loop.
+        try:
+            sensors = await asyncio.to_thread(self.sensors.get_temperatures)
+        except Exception as e:  # noqa: BLE001 -- WMI/COM raise arbitrary types; a source error is not a loop error
+            logger.error(f"Error reading sensors: {e}")
+            self._set_sensors_ok(False)
+            return
+
+        # An empty result is how every provider reports "I cannot reach my app".
+        self._set_sensors_ok(bool(sensors))
+
+        self._selection = select(sensors, filters_for(CONFIG, self.sensors.name))
+        # Nothing matched reads as 0 °C, which holds the fan at the curve's floor; Settings shows which
+        # filters match nothing, so that state is visible rather than silent.
+        raw = self._selection.max_value or 0
+
+        # Round rather than truncate: sources such as the LibreHardwareMonitor web
+        # server report fractions, and int() would bias every reading downwards.
+        self._max_temp = round(self._smoother.add(raw))
+        if raw != self._max_temp:
+            logger.debug(f"Smoothed max {raw} -> {self._max_temp} (median of {self._temp_window})")
+        self._notify_temps()
+
+        try:
+            await self._drive_fan()
+        except Exception:
+            # The device was in the middle of an exchange, so its state is unknown: the next tick reads
+            # it again. A fault anywhere else keeps the cached value and spares the serial round trip.
+            self._forget_device_value()
+            raise
+
+    async def _drive_fan(self):
+        """Bring the fan to the speed the current temperatures, or Manual mode, call for."""
+        current_dimmer = await self._current_dimmer()
+
+        # Calculate new speed based on mode
+        if self._mode == Mode.AUTO:
+            ranges = self._ranges  # read once: the GUI may swap it mid-tick
+            new_value = calculate_dimmer_value(self._max_temp, ranges)
+
+            # Apply step limits
+            if current_dimmer is not None and CONFIG.control.max_step:
+                new_value = max(new_value, current_dimmer - CONFIG.control.max_step)
+
+            # Apply minimum change threshold
+            if current_dimmer is not None and abs(current_dimmer - new_value) < CONFIG.control.ignore_less_than:
+                new_value = current_dimmer
+        else:
+            # Manual mode
+            new_value = self._manual_speed
+
+        # Update speed if changed
+        if current_dimmer != new_value:
+            logger.info(
+                f"Max: {self._max_temp} ({self._describe_hottest()}). "
+                f"{CONFIG.device.pwm_command}: {current_dimmer} -> {new_value}"
+            )
+            await self._set_fan_speed(new_value)
+        elif current_dimmer is not None:
+            self._current_speed = current_dimmer
+            self._notify_speed()
 
     async def shutdown(self):
         """Shutdown the controller gracefully."""

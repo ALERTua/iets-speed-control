@@ -1,4 +1,4 @@
-"""The Home destination: connection state, the three live numbers, temperature history, mode switch.
+"""The Home destination: connection state, the maximum and the fan, each filter's reading, history, mode.
 
 Speed control and the fan curve live in the Settings destination; navigation between the two is the
 rail's job, so nothing here opens another view.
@@ -16,8 +16,9 @@ import customtkinter as ctk
 
 from ..controller import Mode, SpeedController
 from ..sensors import lacks_admin_rights
+from .filter_readings import FilterReadings
 from .history import TemperatureHistory
-from .theme import CARD, CPU_COLOR, FAN_COLOR, GPU_COLOR, HISTORY_WINDOW_SECONDS, MUTED, UI_POLL_MS
+from .theme import ACCENT_COLOR, CARD, FAN_COLOR, HISTORY_WINDOW_SECONDS, MAX_COLOR, MUTED, UI_POLL_MS
 
 logger = logging.getLogger(__name__)
 
@@ -53,13 +54,17 @@ class StatusPanel(ctk.CTkFrame):
         numbers = ctk.CTkFrame(self, fg_color=CARD, corner_radius=8)
         numbers.pack(fill="x", padx=14, pady=6)
         self.value_labels = {}
-        for name, colour in (("CPU", CPU_COLOR), ("GPU", GPU_COLOR), ("Fan", FAN_COLOR)):
+        for name, colour in (("Max", MAX_COLOR), ("Fan", FAN_COLOR)):
             cell = ctk.CTkFrame(numbers, fg_color="transparent")
             cell.pack(side="left", expand=True, pady=10)
             ctk.CTkLabel(cell, text=name, font=("", 10), text_color=MUTED).pack()
             value = ctk.CTkLabel(cell, text="--", font=("", 20, "bold"), text_color=colour)
             value.pack()
             self.value_labels[name] = value
+
+        # Every filter of the active source with its reading; the one that gives the maximum is marked.
+        self.filter_readings = FilterReadings(self, fg_color=CARD, corner_radius=8)
+        self.filter_readings.pack(fill="x", padx=14, pady=(0, 6), ipady=4)
 
         # The graph takes whatever room is left: a ten-minute span needs the width and height.
         self.history = TemperatureHistory(self, window_seconds=HISTORY_WINDOW_SECONDS, height=220)
@@ -90,15 +95,15 @@ class StatusPanel(ctk.CTkFrame):
 
         # Every reading matters for the graph, but only the last one for the labels -- and one redraw
         # is enough for the whole batch, however many readings the drain picked up.
-        for cpu, gpu in temps:
-            self.history.add(cpu, gpu)
+        for max_temp, _selection in temps:
+            self.history.add(max_temp)
         if temps:
             self.history.redraw()
 
         if "temps" in latest:
-            cpu, gpu = latest["temps"]
-            self.value_labels["CPU"].configure(text=f"{cpu} °C")
-            self.value_labels["GPU"].configure(text=f"{gpu} °C")
+            max_temp, selection = latest["temps"]
+            self.value_labels["Max"].configure(text=f"{max_temp} °C")
+            self.filter_readings.show(selection)
         if "speed" in latest:
             self.value_labels["Fan"].configure(text=f"{latest['speed'][0]} %")
         if "status" in latest:
@@ -112,7 +117,7 @@ class StatusPanel(ctk.CTkFrame):
 
     # --- widget updates -------------------------------------------------------------------
 
-    def _apply_status(self, connected: bool, running: bool, sensors_ok: bool = True):
+    def _apply_status(self, connected: bool, running: bool, sensors_ok: bool = True, loop_ok: bool = True):
         """Two things can be wrong, and the difference matters when you are fixing it.
 
         A dead serial link leaves the fan wherever it was; a silent temperature source is worse,
@@ -127,16 +132,20 @@ class StatusPanel(ctk.CTkFrame):
             if lacks_admin_rights(self.controller.sensors):
                 text += ": restart as administrator"
             colour = DISCONNECTED_COLOR
+        elif not loop_ok:
+            # The link and the source work, but ticks raise: the fan is not being driven.
+            text = "● Control loop error: see the log"
+            colour = DISCONNECTED_COLOR
         else:
             text = f"● Connected  {self.controller.port or ''}".rstrip()
-            colour = CPU_COLOR
+            colour = ACCENT_COLOR
 
         if not running:
             text += "  (stopped)"
         self.status_label.configure(text=text, text_color=colour)
 
         if self.gui_app:
-            self.gui_app.update_tray_icon(connected and sensors_ok)
+            self.gui_app.update_tray_icon(connected and sensors_ok and loop_ok)
 
     def _on_mode_change(self, value):
         # The manual speed is whatever the user last set, kept in the configuration between runs.

@@ -1,5 +1,7 @@
 """Configuration loading, validation and sparse saving."""
 
+import os
+
 import pytest
 
 from iets_speed_control.util import config as cfg
@@ -134,6 +136,9 @@ def test_a_digits_only_serial_stays_a_string(path):
         ("control:\n  max_step: -1\n", "control.max_step"),
         ("device:\n  baudrate: 0\n", "device.baudrate"),
         ("ui:\n  history_window: 0\n", "ui.history_window"),
+        ("sensors:\n  provider: null\n", "sensors.provider"),
+        ("sensors:\n  provider: 42\n", "sensors.provider"),
+        ("sensors:\n  provider: ' '\n", "sensors.provider"),
         ("control:\n  curve: [[50, 40]]\n", "at least two"),
         ("control:\n  curve: [[50, 40], [40, 60]]\n", "strictly increase"),
         ("control:\n  curve: [[50, 40], [50, 60]]\n", "strictly increase"),
@@ -255,29 +260,39 @@ def test_save_creates_the_directory(tmp_path):
 #
 # The window geometry is saved on every minimise and on exit, and most of those save exactly what is
 # already on disk. Rewriting the file each time would spend flash write cycles to change nothing.
+#
+# Each test backdates the file before the second save. Two writes in a row can land on the same
+# timestamp on a fast disk, so comparing the timestamps of two saves cannot tell a rewrite apart.
+
+
+OLD_NS = 1_000_000_000_000_000_000  # 2001-09-09: any rewrite now moves the timestamp away from it
+
+
+def backdate(path):
+    os.utime(path, ns=(OLD_NS, OLD_NS))
 
 
 def test_saving_the_same_configuration_twice_writes_once(path):
     config = cfg.Config()
     config.control.delay = 0.5
     cfg.save(config, path)
-    stamp = path.stat().st_mtime_ns
+    backdate(path)
 
     cfg.save(config, path)
 
-    assert path.stat().st_mtime_ns == stamp, "an unchanged configuration must not be rewritten"
+    assert path.stat().st_mtime_ns == OLD_NS, "an unchanged configuration must not be rewritten"
 
 
 def test_saving_an_actual_change_does_write(path):
     config = cfg.Config()
     config.control.delay = 0.5
     cfg.save(config, path)
-    stamp = path.stat().st_mtime_ns
+    backdate(path)
 
     config.control.delay = 0.75
     cfg.save(config, path)
 
-    assert path.stat().st_mtime_ns != stamp
+    assert path.stat().st_mtime_ns != OLD_NS
     assert "0.75" in path.read_text(encoding="utf-8")
 
 
@@ -286,23 +301,23 @@ def test_a_hand_edited_file_is_left_alone_when_it_already_matches(path):
     path.write_text("control:\n  # tuned by hand\n  delay: 0.5\n", encoding="utf-8")
     config = cfg.load(path)
     cfg.save(config, path)  # normalises once, if at all
-    stamp = path.stat().st_mtime_ns
+    backdate(path)
 
     cfg.save(config, path)
 
-    assert path.stat().st_mtime_ns == stamp
+    assert path.stat().st_mtime_ns == OLD_NS
 
 
 def test_reverting_a_value_to_its_default_is_a_change(path):
     config = cfg.Config()
     config.control.delay = 0.5
     cfg.save(config, path)
-    stamp = path.stat().st_mtime_ns
+    backdate(path)
 
     config.control.delay = cfg.Config().control.delay
     cfg.save(config, path)
 
-    assert path.stat().st_mtime_ns != stamp
+    assert path.stat().st_mtime_ns != OLD_NS
     assert "delay" not in path.read_text(encoding="utf-8"), "back to default means dropped from the file"
 
 
@@ -349,3 +364,129 @@ def test_integral_curve_values_are_written_without_a_decimal_point(path):
 
     assert "- [40, 10]" in text
     assert "- [80, 90.5]" in text, "genuine fractions must survive"
+
+
+# --- the filter list ------------------------------------------------------------------------------
+
+
+def test_a_source_without_its_own_filters_uses_the_defaults():
+    assert cfg.filters_for(cfg.Config(), "aida64") == ["CPU", "GPU"]
+
+
+def test_a_source_keeps_its_own_filters(path):
+    path.write_text("sensors:\n  filters:\n    lhm-web:\n      - Core Max\n      - GPU Hot Spot\n", encoding="utf-8")
+
+    config = cfg.load(path)
+
+    assert cfg.filters_for(config, "lhm-web") == ["Core Max", "GPU Hot Spot"]
+    assert cfg.filters_for(config, "aida64") == ["CPU", "GPU"], "other sources keep the defaults"
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        ("sensors:\n  filters: [CPU]\n", "must map a source"),
+        ("sensors:\n  filters:\n    aida64: []\n", "at least one filter"),
+        ("sensors:\n  filters:\n    aida64: CPU\n", "at least one filter"),
+        ("sensors:\n  filters:\n    aida64: ['CPU (']\n", r"aida64\[0\].*not a valid regular expression"),
+        ("sensors:\n  filters:\n    aida64: ['']\n", "non-empty text"),
+    ],
+)
+def test_unusable_filters_are_refused_by_key(path, document, message):
+    path.write_text(document, encoding="utf-8")
+
+    with pytest.raises(cfg.ConfigError, match=message):
+        cfg.load(path)
+
+
+def test_the_old_cpu_and_gpu_filters_become_the_sources_list(path):
+    path.write_text(
+        "sensors:\n  provider: lhm-web\n  cpu_filter: CPU Package\n  gpu_filter: GPU Hot Spot\n", encoding="utf-8"
+    )
+
+    config = cfg.load(path)
+
+    assert cfg.filters_for(config, "lhm-web") == [r"CPU\ Package", r"GPU\ Hot\ Spot"]
+
+
+def test_an_old_filter_keeps_matching_its_text_literally(path):
+    """They were plain text, so "(Tctl)" must not turn into a regex group."""
+    from iets_speed_control.util.filters import select
+
+    path.write_text("sensors:\n  cpu_filter: CPU (Tctl)\n", encoding="utf-8")
+
+    patterns = cfg.filters_for(cfg.load(path), "aida64")
+
+    assert select({"CPU (Tctl)": 70.0, "CPU Tctl": 99.0}, patterns).max_value == 70.0
+
+
+def test_a_missing_old_key_keeps_its_old_default(path):
+    """A file with only cpu_filter still meant GPU for the GPU."""
+    path.write_text("sensors:\n  cpu_filter: Core Max\n", encoding="utf-8")
+
+    assert cfg.filters_for(cfg.load(path), "aida64") == [r"Core\ Max", "GPU"]
+
+
+def test_old_filters_equal_to_the_defaults_leave_no_entry(path):
+    path.write_text("sensors:\n  cpu_filter: CPU\n  gpu_filter: GPU\n", encoding="utf-8")
+
+    assert cfg.load(path).sensors.filters == {}
+
+
+def test_old_filters_do_not_override_a_list_already_there(path, caplog):
+    path.write_text("sensors:\n  cpu_filter: Core Max\n  filters:\n    aida64: [Package]\n", encoding="utf-8")
+
+    config = cfg.load(path)
+
+    assert cfg.filters_for(config, "aida64") == ["Package"]
+    assert any("Ignoring" in record.message for record in caplog.records)
+
+
+def test_old_filter_keys_are_not_reported_as_unknown(path, caplog):
+    path.write_text("sensors:\n  cpu_filter: Core Max\n", encoding="utf-8")
+
+    cfg.load(path)
+
+    assert not any("unknown" in record.message for record in caplog.records)
+
+
+def test_saving_writes_the_list_and_drops_the_old_keys(path):
+    path.write_text("sensors:\n  cpu_filter: Core Max\n", encoding="utf-8")
+
+    cfg.save(cfg.load(path), path)
+    text = path.read_text(encoding="utf-8")
+
+    assert "cpu_filter" not in text
+    assert cfg.filters_for(cfg.load(path), "aida64") == [r"Core\ Max", "GPU"]
+
+
+def test_a_copy_does_not_share_the_lists():
+    config = cfg.Config()
+    config.sensors.filters["aida64"] = ["CPU"]
+
+    copied = cfg.copy(config)
+    copied.sensors.filters["aida64"].append("GPU")
+
+    assert config.sensors.filters["aida64"] == ["CPU"]
+
+
+@pytest.mark.parametrize(("alias", "source"), [("ohm", "lhm"), ("Lenovo", "lenovo-wmi"), ("lhm_web", "lhm-web")])
+def test_old_filters_land_under_the_code_name_when_the_file_uses_an_alias(path, alias, source):
+    """Every reader looks the list up by the code name; under the alias it would be lost."""
+    path.write_text(f"sensors:\n  provider: {alias}\n  cpu_filter: Core Max\n", encoding="utf-8")
+
+    assert cfg.filters_for(cfg.load(path), source) == ["Core\\ Max", "GPU"]
+
+
+def test_a_repeated_filter_is_refused(path):
+    path.write_text("sensors:\n  filters:\n    aida64: [CPU, GPU, CPU]\n", encoding="utf-8")
+
+    with pytest.raises(cfg.ConfigError, match=r"aida64\[2\].*already in the list"):
+        cfg.load(path)
+
+
+def test_every_alias_names_a_registered_source():
+    from iets_speed_control.sensors import PROVIDERS
+    from iets_speed_control.util.source_names import ALIASES
+
+    assert set(ALIASES.values()) <= set(PROVIDERS)

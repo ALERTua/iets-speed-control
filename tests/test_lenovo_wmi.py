@@ -75,13 +75,11 @@ def test_reads_cpu_gpu_and_chipset(elevated, fake_wmi):
 
 def test_the_default_filters_find_one_cpu_and_one_gpu(elevated, fake_wmi):
     """The labels are bare, so the default filters "CPU" and "GPU" work without any tuning."""
-    from iets_speed_control.util.config import Config
+    from iets_speed_control.util.filters import DEFAULT_FILTERS, select
 
-    readings = LenovoWmiProvider().get_temperatures()
-    defaults = Config().sensors
+    selection = select(LenovoWmiProvider().get_temperatures(), DEFAULT_FILTERS)
 
-    assert [label for label in readings if defaults.cpu_filter in label] == ["CPU"]
-    assert [label for label in readings if defaults.gpu_filter in label] == ["GPU"]
+    assert [(match.pattern, match.label) for match in selection.matches] == [("CPU", "CPU"), ("GPU", "GPU")]
 
 
 def test_without_admin_rights_it_says_so_and_does_not_query(not_elevated, fake_wmi, caplog):

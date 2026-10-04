@@ -20,6 +20,7 @@ import os
 import queue
 import threading
 from collections.abc import Callable
+from concurrent.futures import Future
 from pathlib import Path
 from tkinter import TclError
 
@@ -28,12 +29,23 @@ from serial.tools.list_ports_windows import comports
 
 from ..controller import Mode, SpeedController
 from ..sensors import PROVIDER_LABELS, PROVIDER_NAMES, find_provider, lacks_admin_rights
-from ..util.config import CONFIG, CONFIG_PATH, LOG_LEVELS, ConfigError, get_value, set_value, with_value
+from ..util.config import (
+    CONFIG,
+    CONFIG_PATH,
+    LOG_LEVELS,
+    ConfigError,
+    filters_for,
+    get_value,
+    set_value,
+    with_value,
+)
 from ..util.config import defaults as config_defaults
 from ..util.config import save as save_config
+from ..util.filters import DEFAULT_FILTERS, Selection, select
 from ..util.logger import default_log_file
 from ..util.logger import reconfigure as reapply_log_settings
 from .curve_editor import CurveEditor
+from .filter_list import FilterList
 from .theme import (
     BACKGROUND,
     CARD,
@@ -109,6 +121,13 @@ def parse_plain(text: str) -> str:
 class SettingsRow:
     """One row inside a card: title, description and any error on the left, control on the right."""
 
+    # The row builders attach the control under its own name. Only the one matching the kind of row
+    # is set; the others stay None, so reading the wrong one is a type error, not a missing attribute.
+    entry: ctk.CTkEntry | None = None
+    menu: ctk.CTkOptionMenu | None = None
+    combo: ctk.CTkComboBox | None = None
+    switch: ctk.CTkSwitch | None = None
+
     def __init__(self, card, title, subtitle, control, row_index):
         self.title = title
         self.subtitle = subtitle
@@ -141,6 +160,12 @@ class SettingsRow:
     def matches(self, needle: str) -> bool:
         return needle in self.title.lower() or needle in self.subtitle.lower()
 
+    def require_combo(self) -> ctk.CTkComboBox:
+        """The combo box of a row built by _combo_row; any other row is a programming error."""
+        if self.combo is None:
+            raise TypeError(f"Settings row {self.title!r} has no combo box")
+        return self.combo
+
     def show_error(self, message: str):
         """Say why the value was refused, right under the description that asked for it."""
         if self.error is None:
@@ -170,6 +195,8 @@ class SettingsSection:
     def __init__(self, parent, title):
         self.title = title
         self.rows: list[SettingsRow] = []
+        # Grid places rows and full-width widgets in one sequence; each takes the next slot.
+        self._slots = 0
         # Which configuration keys this card owns, and how to redisplay each one. Reset needs both.
         self.bindings: list[tuple[str, Callable[[], None]]] = []
         self.on_show: Callable[[], None] | None = None
@@ -183,14 +210,21 @@ class SettingsSection:
         self.card.pack(fill="both", expand=True)
 
     def add_row(self, title, subtitle, control) -> SettingsRow:
-        row = SettingsRow(self.card, title, subtitle, control, len(self.rows))
+        row = SettingsRow(self.card, title, subtitle, control, self._slots)
+        self._slots += 1
         self.rows.append(row)
         return row
 
-    def add_widget(self, widget):
-        """Attach a full-width widget (the curve editor) under the rows."""
-        widget.grid(row=len(self.rows) * 2, column=0, columnspan=2, sticky="nsew", padx=14, pady=(4, 12))
-        self.card.rowconfigure(len(self.rows) * 2, weight=1)
+    def add_widget(self, widget, stretch: bool = True):
+        """Attach a full-width widget, such as the curve editor, in the next slot.
+
+        `stretch` gives it the spare height of the card; the curve editor wants it, a list does not.
+        """
+        grid_row = self._slots * 2
+        self._slots += 1
+        widget.grid(row=grid_row, column=0, columnspan=2, sticky="nsew", padx=14, pady=(4, 12))
+        if stretch:
+            self.card.rowconfigure(grid_row, weight=1)
 
     def register(self, path: str, refresh: Callable[[], None]):
         self.bindings.append((path, refresh))
@@ -210,7 +244,7 @@ class SettingsView(ctk.CTkFrame):
         controller: SpeedController,
         on_history_window: Callable[[int], None] | None = None,
         history_window: int = HISTORY_WINDOW_SECONDS,
-        on_reconnect: Callable[[], object] | None = None,
+        on_reconnect: Callable[[], Future[bool] | None] | None = None,
     ):
         super().__init__(master, fg_color=BACKGROUND)
         self.controller = controller
@@ -222,6 +256,9 @@ class SettingsView(ctk.CTkFrame):
         self.sections: dict[str, SettingsSection] = {}
         self.active: str | None = None
         self.lhm_rows: list[SettingsRow] = []
+        # Numbers each sensor read, so a read that finishes after the source or the filters changed
+        # can be recognised as stale and dropped instead of painting an old verdict over the new state.
+        self._match_request = 0
 
         self._build_body()
         self._build_curve_section()
@@ -683,7 +720,8 @@ class SettingsView(ctk.CTkFrame):
             "sensors.provider",
             sorted(PROVIDER_NAMES),
             # The menu shows the product name; the file keeps the code name.
-            display=lambda name: PROVIDER_LABELS.get(name, name),
+            # sensors.provider is validated as text on load, so str() never has to invent a label.
+            display=lambda name: PROVIDER_LABELS.get(str(name), str(name)),
             parse=lambda label: PROVIDER_NAMES.get(label, label),
             width=260,
             apply=self._apply_provider,
@@ -694,34 +732,18 @@ class SettingsView(ctk.CTkFrame):
             self.provider_row.text, text=ADMIN_NOTE, font=("", 10), text_color=ERROR_COLOR, anchor="w"
         )
 
-        self.cpu_filter_row = self._combo_row(
-            section,
-            "CPU sensor filter",
-            "Hottest matching sensor drives the curve",
-            "sensors.cpu_filter",
-            parse=parse_required,
-            apply=lambda _value: self.refresh_sensor_match(),
+        # Each filter shows what it catches right now: a filter matching nothing reads 0 °C and quietly
+        # holds the fan at its minimum, so that belongs on screen rather than in the log. The list sits
+        # under its own row at full width, so its combo boxes do not widen the card's control column.
+        self.filters_row = section.add_row(
+            "Filters",
+            "The hottest match of any of them drives the curve",
+            ctk.CTkButton(section.card, text="Add filter", width=110, command=lambda: self.filter_list.add_filter()),
         )
-        self.gpu_filter_row = self._combo_row(
-            section,
-            "GPU sensor filter",
-            "Same, for the GPU",
-            "sensors.gpu_filter",
-            parse=parse_required,
-            apply=lambda _value: self.refresh_sensor_match(),
-        )
-
-        # A filter matching nothing reads 0 °C and quietly holds the fan at its minimum, so what the
-        # filters currently catch belongs on screen rather than in the log. The reading goes in the
-        # row's own text column, not beside the button: grid sizes the control column to the widest
-        # control in the card, and a wide control here would squeeze every description above.
-        row = section.add_row(
-            "Filter match",
-            "What the filters above find right now",
-            ctk.CTkButton(section.card, text="Test", width=110, command=self.refresh_sensor_match),
-        )
-        self.match_label = ctk.CTkLabel(row.text, text="not checked yet", font=("", 11), text_color=MUTED, anchor="w")
-        self.match_label.pack(anchor="w", pady=(2, 0))
+        self.filter_list = FilterList(section.card, on_change=self._commit_filters, on_error=self._show_filter_error)
+        section.add_widget(self.filter_list, stretch=False)
+        self.filter_list.set_patterns(filters_for(CONFIG, self.controller.sensors.name))
+        section.register("sensors.filters", self._redisplay_filters)
 
         self.lhm_rows = [
             self._entry_row(
@@ -768,9 +790,13 @@ class SettingsView(ctk.CTkFrame):
             self.controller.sensors = name
         except ValueError as e:
             logger.error(f"Could not switch the sensor source: {e}")
-            self.match_label.configure(text=str(e), text_color=ERROR_COLOR)
+            self._show_filter_error(str(e))
             return
 
+        # Each source keeps its own filters, so the list follows the source. Whatever the old source
+        # read or failed to read says nothing about this one, so its verdict goes too.
+        self._redisplay_filters()
+        self._show_filter_error(None)
         self.refresh_sensor_match()
 
     def _on_provider_reset(self):
@@ -790,32 +816,55 @@ class SettingsView(ctk.CTkFrame):
         elif self.admin_label.winfo_manager():
             self.admin_label.pack_forget()
 
-    def refresh_sensor_match(self):
-        """Read the active source once and report what the two filters catch."""
-        self.match_label.configure(text="checking…", text_color=MUTED)
-        self._in_background(self.controller.sensors.get_temperatures, self._show_sensor_match)
+    def _redisplay_filters(self):
+        self.filter_list.set_patterns(filters_for(CONFIG, self.controller.sensors.name))
 
-    def _show_sensor_match(self, ok: bool, payload):
+    def _commit_filters(self, patterns: list[str]) -> str | None:
+        """Store the active source's filters; a list equal to the defaults is not written at all."""
+        source = self.controller.sensors.name
+        filters = {key: list(value) for key, value in CONFIG.sensors.filters.items()}
+        if patterns == list(DEFAULT_FILTERS):
+            filters.pop(source, None)
+        else:
+            filters[source] = patterns
+
+        error = self._commit("sensors.filters", filters)
+        if error is None:
+            self.refresh_sensor_match()
+        return error
+
+    def _show_filter_error(self, message: str | None):
+        if message:
+            self.filters_row.show_error(message)
+        else:
+            self.filters_row.clear_error()
+
+    def refresh_sensor_match(self):
+        """Read the active source once, offer its sensors as filters, and show what each filter catches."""
+        self._match_request += 1
+        request = self._match_request
+        self._in_background(
+            self.controller.sensors.get_temperatures,
+            lambda ok, payload: self._show_sensor_match(ok, payload, request),
+        )
+
+    def _show_sensor_match(self, ok: bool, payload, request: int | None = None):
+        """Redraw the whole verdict from this one read, so nothing from an earlier read survives it."""
+        if request is not None and request != self._match_request:
+            logger.debug(f"Dropping sensor read #{request}; #{self._match_request} is the current one")
+            return
+
+        self._show_filter_error(None)
         if not ok:
-            self.match_label.configure(text=f"read failed: {payload}", text_color=ERROR_COLOR)
+            self.filter_list.show_selection(Selection())
+            self._show_filter_error(f"Reading {self.controller.sensors.name} failed: {payload}")
             return
 
         readings: dict[str, float] = payload or {}
-        for row, key in ((self.cpu_filter_row, "cpu"), (self.gpu_filter_row, "gpu")):
-            row.combo.configure(values=sorted(readings) or [get_value(CONFIG, f"sensors.{key}_filter")])
-
-        parts = []
-        missing = False
-        for label, needle in (("CPU", CONFIG.sensors.cpu_filter), ("GPU", CONFIG.sensors.gpu_filter)):
-            hits = [value for name, value in readings.items() if needle in name]
-            if hits:
-                unit = "sensor" if len(hits) == 1 else "sensors"
-                parts.append(f"{label}: {len(hits)} {unit}, max {max(hits):g} °C")
-            else:
-                parts.append(f"{label}: nothing matches “{needle}”")
-                missing = True
-
-        self.match_label.configure(text=" · ".join(parts), text_color=ERROR_COLOR if missing else MUTED)
+        self.filter_list.set_suggestions(list(readings))
+        self.filter_list.show_selection(select(readings, filters_for(CONFIG, self.controller.sensors.name)))
+        if not readings:
+            self._show_filter_error(f"No readings from {self.controller.sensors.name}")
 
     # --- Device ---------------------------------------------------------------------------
 
@@ -875,7 +924,7 @@ class SettingsView(ctk.CTkFrame):
             logger.debug(f"Could not list serial ports: {e}")
             return
 
-        self.port_row.combo.configure(values=ports or [CONFIG.device.port])
+        self.port_row.require_combo().configure(values=ports or [CONFIG.device.port])
 
     def refresh_connection(self):
         connected = self.controller.connected

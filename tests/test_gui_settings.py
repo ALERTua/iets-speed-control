@@ -298,15 +298,14 @@ def test_changing_the_source_swaps_the_provider(view):
 
 
 def test_changing_the_smoothing_window_rebuilds_the_smoothers(view):
-    before = view.controller._cpu_smoother
+    before = view.controller._smoother
 
     edit(view, "Control", "Smoothing window", "9")
 
     assert CONFIG.control.temp_window == 9
     assert view.controller.temp_window == 9
-    assert view.controller._cpu_smoother is not before, "a resized window needs a new smoother"
-    assert view.controller._cpu_smoother.window == 9
-    assert view.controller._gpu_smoother.window == 9
+    assert view.controller._smoother is not before, "a resized window needs a new smoother"
+    assert view.controller._smoother.window == 9
 
 
 @pytest.fixture
@@ -354,6 +353,17 @@ def test_a_hand_written_alias_still_gets_the_admin_note(view, unelevated):
     view._apply_admin_note()
 
     assert view.admin_label.winfo_manager()
+
+
+def test_asking_a_row_for_a_combo_it_does_not_have_is_an_error(view):
+    with pytest.raises(TypeError, match="Temperature source"):
+        row_named(view, "Sensors", "Temperature source").require_combo()
+
+
+def test_a_combo_row_hands_back_its_combo(view):
+    row = row_named(view, "Device", "Serial port")
+
+    assert row.require_combo() is row.combo
 
 
 def test_the_web_server_rows_appear_only_for_that_source(view):
@@ -432,49 +442,190 @@ def test_no_description_is_cut_off(view, tk_root, web_server_rows, monkeypatch):
     assert not too_wide, f"at {content_width}px these descriptions are cut off:\n" + "\n".join(too_wide)
 
 
-def test_the_filter_reading_does_not_widen_the_control_column(view):
-    """The match text goes in the row's text column; beside the button it would squeeze the card."""
-    row = row_named(view, "Sensors", "Filter match")
-
-    assert view.match_label.master is row.text
-    assert row.control.winfo_reqwidth() <= 120
+# --- the filter list ------------------------------------------------------------------------------
 
 
-# --- filter feedback -----------------------------------------------------------------------------
+def line_with(view, pattern):
+    for line in view.filter_list.lines:
+        if line.pattern == pattern:
+            return line
+
+    raise AssertionError(f"no filter {pattern!r}; have {view.filter_list.patterns}")
 
 
-def test_the_match_line_counts_what_the_filters_find(view):
-    CONFIG.sensors.cpu_filter = "Fake CPU"
-    CONFIG.sensors.gpu_filter = "Fake GPU"
+def test_the_list_starts_with_the_sources_filters(view):
+    assert view.filter_list.patterns == ["CPU", "GPU"]
+
+
+def test_each_filter_shows_what_it_catches_and_the_maximum_is_marked(view):
+    from iets_speed_control.gui.theme import MAX_COLOR, MUTED
 
     view._show_sensor_match(True, FakeProvider().get_temperatures())
 
-    text = view.match_label.cget("text")
-    assert "CPU: 2 sensors, max 61 °C" in text
-    assert "GPU: 1 sensor, max 44 °C" in text, "one match is a sensor, not 1 sensors"
+    cpu, gpu = line_with(view, "CPU").result, line_with(view, "GPU").result
+    assert "61" in cpu.cget("text") and "Fake CPU/Core Max" in cpu.cget("text")
+    assert "max" in cpu.cget("text"), "the filter giving the maximum is the one the curve follows"
+    assert cpu.cget("text_color") == MAX_COLOR
+    assert "44" in gpu.cget("text") and "max" not in gpu.cget("text")
+    assert gpu.cget("text_color") == MUTED
 
 
 def test_a_filter_matching_nothing_is_called_out(view):
+    from iets_speed_control.gui.filter_list import NO_MATCH
     from iets_speed_control.gui.theme import ERROR_COLOR
 
-    CONFIG.sensors.cpu_filter = "Nonexistent"
+    CONFIG.sensors.filters["fake"] = ["Nonexistent", "CPU"]
+    view._redisplay_filters()
 
     view._show_sensor_match(True, FakeProvider().get_temperatures())
 
-    assert "nothing matches" in view.match_label.cget("text")
-    assert view.match_label.cget("text_color") == ERROR_COLOR, "0 °C holds the fan at its minimum; say so"
+    result = line_with(view, "Nonexistent").result
+    assert result.cget("text") == NO_MATCH
+    assert result.cget("text_color") == ERROR_COLOR, "0 °C holds the fan at its minimum; say so"
 
 
-def test_the_match_line_reports_a_failed_read(view):
+def test_the_sources_sensors_are_offered_as_filters(view):
+    view._show_sensor_match(True, FakeProvider().get_temperatures())
+
+    assert "Fake GPU/Hot Spot" in line_with(view, "CPU").combo.cget("values")
+
+
+def test_a_picked_sensor_is_stored_literally(view):
+    import re
+
+    line_with(view, "CPU")._picked("Fake CPU/Core Max")
+
+    assert CONFIG.sensors.filters["fake"] == [re.escape("Fake CPU/Core Max"), "GPU"]
+
+
+def test_a_broken_expression_is_refused_with_the_reason(view):
+    line = line_with(view, "CPU")
+    line.combo.set("CPU (")
+
+    view.filter_list.commit()
+
+    assert "not a valid regular expression" in view.filters_row.error.cget("text")
+    assert CONFIG.sensors.filters == {}, "a filter the app could not use must not reach the configuration"
+
+
+def test_removing_a_filter_stores_the_rest(view):
+    view.filter_list._remove(line_with(view, "GPU"))
+
+    assert CONFIG.sensors.filters["fake"] == ["CPU"]
+    assert view.filter_list.patterns == ["CPU"]
+
+
+def test_the_last_filter_cannot_be_removed(view):
+    CONFIG.sensors.filters["fake"] = ["CPU"]
+    view._redisplay_filters()
+
+    view.filter_list._remove(line_with(view, "CPU"))
+
+    assert view.filter_list.patterns == ["CPU"]
+    assert CONFIG.sensors.filters["fake"] == ["CPU"]
+    assert "at least one" in view.filters_row.error.cget("text")
+
+
+def test_a_new_line_counts_once_it_has_text(view):
+    view.filter_list.add_filter()
+    assert view.filter_list.patterns == ["CPU", "GPU"], "an empty line is not a filter yet"
+
+    view.filter_list.lines[-1].combo.set("Hot Spot")
+    view.filter_list.commit()
+
+    assert CONFIG.sensors.filters["fake"] == ["CPU", "GPU", "Hot Spot"]
+
+
+def test_going_back_to_the_defaults_writes_nothing(view):
+    view.filter_list._remove(line_with(view, "GPU"))
+    view.filter_list.add_filter()
+    view.filter_list.lines[-1].combo.set("GPU")
+
+    view.filter_list.commit()
+
+    assert "fake" not in CONFIG.sensors.filters, "a list equal to the defaults is not written to the file"
+
+
+def test_the_list_follows_the_source(view, monkeypatch):
+    from iets_speed_control.sensors import LibreHardwareMonitorWebProvider
+
+    monkeypatch.setattr(LibreHardwareMonitorWebProvider, "get_temperatures", lambda self: {})
+    CONFIG.sensors.filters["lhm-web"] = ["Core Max"]
+
+    choose(row_named(view, "Sensors", "Temperature source"), "LibreHardwareMonitor (web server)")
+
+    assert view.filter_list.patterns == ["Core Max"]
+
+
+def test_reset_puts_the_default_filters_back(view, monkeypatch):
+    from iets_speed_control.sensors import Aida64Provider
+
+    # Reset also puts the source back to aida64, whose read would otherwise reach the real WMI.
+    monkeypatch.setattr(Aida64Provider, "get_temperatures", lambda self: {})
+    CONFIG.sensors.filters["fake"] = ["Core Max"]
+    view._redisplay_filters()
+
+    view._reset_section(view.sections["Sensors"])
+
+    assert CONFIG.sensors.filters == {}
+    assert view.filter_list.patterns == ["CPU", "GPU"]
+
+
+def test_a_failed_read_is_reported_on_the_filters_row(view):
     view._show_sensor_match(False, OSError("connection refused"))
 
-    assert "connection refused" in view.match_label.cget("text")
+    assert "connection refused" in view.filters_row.error.cget("text")
 
 
-def test_the_filter_dropdowns_offer_the_real_labels(view):
+def test_a_source_with_no_readings_is_reported(view):
+    """The loop then drives the fan from 0 °C, so this is the state worth saying out loud."""
+    view._show_sensor_match(True, {})
+
+    assert "No readings" in view.filters_row.error.cget("text")
+
+
+def test_a_filter_typed_and_entered_takes_effect(view):
+    """Enter in the combo box is how a typed filter reaches the configuration."""
+    view.show("Sensors")
+    view.update()
+    view.filter_list.add_filter()
+    combo = view.filter_list.lines[-1].combo
+
+    combo.set("Hot Spot")
+    combo._entry.focus_force()
+    combo.update()
+    combo._entry.event_generate("<Return>")
+    view.update()
+
+    assert CONFIG.sensors.filters["fake"] == ["CPU", "GPU", "Hot Spot"]
+
+
+def test_an_empty_new_line_is_not_shown_as_a_filter_that_matches_nothing(view):
+    from iets_speed_control.gui.filter_list import NO_MATCH
+
+    view.filter_list.add_filter()
+
     view._show_sensor_match(True, FakeProvider().get_temperatures())
 
-    assert "Fake GPU/Hot Spot" in view.cpu_filter_row.combo.cget("values")
+    assert view.filter_list.lines[-1].result.cget("text") != NO_MATCH
+
+
+def test_the_maximum_is_marked_on_the_right_line_when_patterns_repeat_in_the_selection(view):
+    """Lines pair with the matches in order, not by text, so equal texts cannot hide the marker."""
+    from iets_speed_control.util.filters import select
+
+    view.filter_list.set_patterns(["CPU", "CPU"])
+
+    view.filter_list.show_selection(select(FakeProvider().get_temperatures(), ["CPU", "CPU"]))
+
+    marked = ["max" in line.result.cget("text") for line in view.filter_list.lines]
+    assert marked == [True, False]
+
+
+def test_the_filter_list_does_not_widen_the_control_column(view):
+    """The list spans the card; its combo boxes beside the descriptions would squeeze them all."""
+    assert view.filter_list.grid_info()["columnspan"] == 2
+    assert view.filters_row.control.winfo_reqwidth() <= 120
 
 
 def test_background_work_lands_on_the_tk_thread(view, tk_root):
@@ -560,3 +711,45 @@ def test_the_dead_sensor_filter_note_is_gone(view):
     titles = [row.title for row in view.sections["Manual"].rows]
 
     assert titles == ["Control mode", "Manual speed"]
+
+
+def test_a_good_read_clears_the_error_of_an_earlier_one(view):
+    """Switching from a silent source to a working one must not leave the old warning up."""
+    view._show_sensor_match(True, {})
+    assert view.filters_row.error.winfo_manager(), "test setup: the empty read must have warned"
+
+    view._show_sensor_match(True, FakeProvider().get_temperatures())
+
+    assert not view.filters_row.error.winfo_manager()
+
+
+def test_a_failed_read_clears_the_results_of_an_earlier_one(view):
+    view._show_sensor_match(True, FakeProvider().get_temperatures())
+
+    view._show_sensor_match(False, OSError("gone"))
+
+    assert all(line.result.cget("text") == "" for line in view.filter_list.lines)
+
+
+def test_a_read_that_finishes_after_a_newer_one_started_is_dropped(view, monkeypatch):
+    """A slow read of the old source must not paint its verdict over the new source."""
+    monkeypatch.setattr(view, "_in_background", lambda work, done: None)
+    view.refresh_sensor_match()
+    stale = view._match_request
+    view.refresh_sensor_match()
+
+    view._show_sensor_match(True, {}, stale)
+
+    assert not view.filters_row.error.winfo_manager(), "the stale empty read must not raise a warning"
+
+
+def test_switching_the_source_clears_the_old_verdict_at_once(view, monkeypatch):
+    from iets_speed_control.sensors import LibreHardwareMonitorWebProvider
+
+    monkeypatch.setattr(LibreHardwareMonitorWebProvider, "get_temperatures", lambda self: {"CPU": 50.0})
+    monkeypatch.setattr(view, "_in_background", lambda work, done: None)
+    view._show_sensor_match(True, {})
+
+    choose(row_named(view, "Sensors", "Temperature source"), "LibreHardwareMonitor (web server)")
+
+    assert not view.filters_row.error.winfo_manager()

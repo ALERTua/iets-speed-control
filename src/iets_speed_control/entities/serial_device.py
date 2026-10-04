@@ -42,16 +42,20 @@ class SerialDevice:
         await self.disconnect()
 
     @property
-    def connected(self):
-        output = self.serial and self.serial.is_open and not self.serial.closed
-        if output:
-            try:
-                _ = self.serial.in_waiting  # type: ignore[union-attr]
-            except SerialException as e:
-                if "Access is denied" in str(e):
-                    return False
+    def connected(self) -> bool:
+        serial = self.serial
+        if serial is None or not serial.is_open or serial.closed:
+            return False
 
-        return output
+        # An unplugged adapter still reports itself open; touching it is what reveals the loss. Any
+        # error counts, not only "Access is denied": a port that cannot be read cannot drive the fan.
+        try:
+            _ = serial.in_waiting
+        except SerialException as e:
+            logger.debug(f"{self.port} is open but not usable: {e}")
+            return False
+
+        return True
 
     async def connect(self):
         if not self.connected:
@@ -148,11 +152,3 @@ class SerialDevice:
         Reading it here would cost a read timeout on every single tick, and nothing needs it.
         """
         await self.send_command(f"{field_name} {value}")
-
-
-async def main():
-    pass
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

@@ -14,8 +14,8 @@ ERROR_COLOR = "#d05050"
 GRID = "#343434"
 CURVE_LINE = "#d8d8d8"
 
-CPU_COLOR = "#a5e12a"
-GPU_COLOR = "#4a9fd8"
+ACCENT_COLOR = "#a5e12a"
+MAX_COLOR = ACCENT_COLOR  # the number that drives the fan
 FAN_COLOR = "#e8e8e8"
 
 # Left navigation rail, per the Material 3 collapsed/expanded rail pattern.

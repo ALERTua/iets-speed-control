@@ -11,7 +11,7 @@ from typing import ClassVar
 import pytest
 
 from iets_speed_control.controller import SpeedController
-from iets_speed_control.entities.dimmer import Dimmer
+from iets_speed_control.entities.tasmota_fan import TasmotaSerialFan
 from iets_speed_control.sensors import Aida64Provider, LibreHardwareMonitorWebProvider
 from iets_speed_control.util import config as cfg
 from iets_speed_control.util.config import CONFIG
@@ -46,7 +46,7 @@ def test_a_new_device_uses_the_current_port(clean_config):
     """Binding CONFIG in the signature default would freeze the port at import time."""
     CONFIG.device.port = "COM42"
 
-    assert Dimmer().port == "COM42"
+    assert TasmotaSerialFan().port == "COM42"
 
 
 def test_a_new_device_uses_the_current_baudrate_timeout_and_command(clean_config):
@@ -54,7 +54,7 @@ def test_a_new_device_uses_the_current_baudrate_timeout_and_command(clean_config
     CONFIG.device.timeout = 0.7
     CONFIG.device.pwm_command = "Channel1"
 
-    device = Dimmer()
+    device = TasmotaSerialFan()
 
     assert (device.baudrate, device.timeout, device.dimmer_command) == (9600, 0.7, "Channel1")
 
@@ -62,7 +62,7 @@ def test_a_new_device_uses_the_current_baudrate_timeout_and_command(clean_config
 def test_explicit_arguments_still_win(clean_config):
     CONFIG.device.port = "COM42"
 
-    assert Dimmer(port="COM9").port == "COM9"
+    assert TasmotaSerialFan(port="COM9").port == "COM9"
 
 
 # --- swapping the sensor source ------------------------------------------------------------------
@@ -77,22 +77,20 @@ def test_the_source_can_be_swapped_by_name(controller):
 
 
 def test_swapping_the_source_starts_the_smoothers_over(controller):
-    controller._cpu_smoother.add(90)
-    controller._gpu_smoother.add(90)
+    controller._smoother.add(90)
 
     controller.sensors = "aida64"
 
-    assert controller._cpu_smoother.samples == (), "readings from the old source say nothing about the new one"
-    assert controller._gpu_smoother.samples == ()
+    assert controller._smoother.samples == (), "readings from the old source say nothing about the new one"
 
 
 def test_swapping_to_the_same_object_changes_nothing(controller):
-    controller._cpu_smoother.add(70)
+    controller._smoother.add(70)
     same = controller.sensors
 
     controller.sensors = same
 
-    assert controller._cpu_smoother.samples == (70.0,)
+    assert controller._smoother.samples == (70.0,)
 
 
 def test_an_unknown_source_is_refused(controller):
@@ -107,23 +105,22 @@ def test_an_unknown_source_is_refused(controller):
 # --- resizing the smoothing window ---------------------------------------------------------------
 
 
-def test_resizing_the_window_replaces_both_smoothers(controller):
-    before = (controller._cpu_smoother, controller._gpu_smoother)
+def test_resizing_the_window_replaces_the_smoother(controller):
+    before = controller._smoother
 
     controller.temp_window = 9
 
     assert controller.temp_window == 9
-    assert controller._cpu_smoother is not before[0]
-    assert controller._gpu_smoother is not before[1]
-    assert (controller._cpu_smoother.window, controller._gpu_smoother.window) == (9, 9)
+    assert controller._smoother is not before
+    assert controller._smoother.window == 9
 
 
 def test_the_same_window_keeps_the_history(controller):
-    controller._cpu_smoother.add(65)
+    controller._smoother.add(65)
 
     controller.temp_window = controller.temp_window
 
-    assert controller._cpu_smoother.samples == (65.0,)
+    assert controller._smoother.samples == (65.0,)
 
 
 def test_a_window_below_one_is_clamped(controller):
@@ -134,9 +131,9 @@ def test_a_window_below_one_is_clamped(controller):
 
 def test_the_window_takes_effect_on_the_next_reading(controller):
     controller.temp_window = 1
-    controller._cpu_smoother.add(50)
+    controller._smoother.add(50)
 
-    assert controller._cpu_smoother.add(90) == 90, "a window of 1 must not average anything in"
+    assert controller._smoother.add(90) == 90, "a window of 1 must not average anything in"
 
 
 # --- reconnecting --------------------------------------------------------------------------------
@@ -156,6 +153,9 @@ class FakeDevice:
         self.disconnected = False
         FakeDevice.instances.append(self)
 
+    def describe(self):
+        return f"{self.port} at {self.baudrate} baud"
+
     async def connect(self):
         self.connected = True
         return True
@@ -168,7 +168,7 @@ class FakeDevice:
 @pytest.fixture
 def fake_device(monkeypatch):
     FakeDevice.instances = []
-    monkeypatch.setattr("iets_speed_control.controller.Dimmer", FakeDevice)
+    monkeypatch.setattr("iets_speed_control.controller.create_fan", FakeDevice)
     return FakeDevice
 
 
@@ -207,7 +207,7 @@ async def test_reconnect_works_when_nothing_was_connected(controller, fake_devic
 
 async def test_reconnect_reports_status(controller, fake_device):
     seen = []
-    controller.set_callbacks(on_status_change=lambda connected, _running, _sensors_ok: seen.append(connected))
+    controller.set_callbacks(on_status_change=lambda connected, *_rest: seen.append(connected))
     controller.device = fake_device()
 
     await controller.reconnect()

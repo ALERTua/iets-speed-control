@@ -11,8 +11,8 @@ from AIDA64.
 ### How it works
 
 - Gets temperatures from AIDA64
-- Filters them by CPU and GPU sensors
-- Takes the maximum int value among all temperatures
+- Keeps the readings that your filters select (by default, every label with `CPU` or `GPU` in it)
+- Takes the hottest of them and maps it through the fan curve
 - Sends PWM command (`Dimmer {value}` by default) to the serial device
 
 ### The interface
@@ -20,7 +20,7 @@ from AIDA64.
 | | |
 | --- | --- |
 | ![Curve](docs/images/settings-curve.png) | **Curve** — the fan curve. Drag a selected point, double-click to add, `Del` to remove, `Ctrl+Z` to undo. The temperature axis is broken at 30 °C so the range worth editing gets the width |
-| ![Sensors](docs/images/settings-sensors.png) | **Sensors** — the temperature source and the CPU/GPU label filters, with a live count of what each filter matches |
+| ![Sensors](docs/images/settings-sensors.png) | **Sensors** — the temperature source and its list of filters, with what each filter catches right now and which one gives the maximum |
 | ![Manual](docs/images/settings-manual.png) | **Manual** — a fixed speed instead of the curve. The mode and the speed are both remembered between runs |
 
 ### Temperature Source
@@ -34,9 +34,7 @@ Pick one with `sensors.provider` in the config file:
 | `lhm-web`          | LibreHardwareMonitor web server | Free; works where the WMI provider does not                                                         |
 | `lenovo-wmi`       | Lenovo Legion embedded controller via WMI | Lenovo Legion laptops only; no monitoring app needed, but this app must run as administrator |
 
-Sensor labels differ between sources, so `sensors.cpu_filter` / `sensors.gpu_filter` may need adjusting when you
-switch. A filter that matches nothing yields 0 °C, which quietly drives the fan to its minimum — Settings →
-Sensors shows how many sensors each filter currently matches.
+Sensor labels differ between sources, so each source keeps its own list of filters (`sensors.filters`, see [CONFIG.md](CONFIG.md)). A filter is a regular expression that ignores case. The hottest reading any filter matches drives the curve. A filter that matches nothing is shown in red in Settings → Sensors, and if no filter matches anything the app reads 0 °C, which holds the fan at the curve's floor.
 
 If the source itself stops answering — AIDA64 closed, LibreHardwareMonitor's web server unreachable, or this app not elevated for `lenovo-wmi` — the tray icon turns red and Home says which source went quiet. The fan keeps running on the curve's floor until it comes back.
 
@@ -102,11 +100,7 @@ poll as `rejected the credentials`, and any `user:password@` embedded in the URL
 Labels are `<hardware>/<sensor>`, for example `NVIDIA GeForce RTX 4090 Laptop GPU/GPU Hot Spot`. Open
 `sensors.lhm_web.url` in a browser to see the exact labels your machine reports.
 
-Keep the filters narrow. LibreHardwareMonitor reports two kinds of entry under the same Temperature type that
-are not live temperatures: `Distance to TjMax`, which *falls* as the chip heats up, and fixed limits such as
-`Critical Temperature` or `Thermal Sensor High Limit`. A filter that catches either drives the fan from the
-wrong number — a `Distance to TjMax` of 60 on an idle CPU would spin the fan up for nothing. The defaults
-`cpu_filter: CPU` and `gpu_filter: GPU` avoid both.
+LibreHardwareMonitor also reports entries under the Temperature type that are not live temperatures: `Distance to TjMax`, which *falls* as the chip heats up, fixed limits such as `Critical Temperature` or `Thermal Sensor High Limit`, and `Temperature Sensor Resolution`. Both LibreHardwareMonitor sources drop them, so no filter can drive the fan from one of them. They are still visible in the LibreHardwareMonitor window.
 
 #### Lenovo Legion Preparation (`sensors.provider: lenovo-wmi`)
 
@@ -115,7 +109,7 @@ Reads the CPU, GPU and chipset (PCH) temperatures straight from the laptop's emb
 - Run IETS Speed Control as administrator. Windows refuses this WMI class to a process without administrator rights
 - If the app runs without administrator rights, Settings -> Sensors shows a red note under the source selector, and Home shows `No temperatures from lenovo-wmi: restart as administrator`
 
-The labels are `CPU`, `GPU` and `PCH`, so the default filters `cpu_filter: CPU` and `gpu_filter: GPU` work as they are. A model that does not report one of these sensors simply leaves it out. Check what your machine reports from an elevated PowerShell:
+The labels are `CPU`, `GPU` and `PCH`, so the default filters `CPU` and `GPU` work as they are. Add `PCH` to the filter list to let the chipset drive the fan too. A model that does not report one of these sensors simply leaves it out. Check what your machine reports from an elevated PowerShell:
 
 ```powershell
 $m = Get-CimInstance -Namespace root\WMI -ClassName LENOVO_OTHER_METHOD
@@ -146,7 +140,7 @@ Everything is optional: without a config file the app runs on its defaults.
 #### GUI
 
 - Run `uv run iets-speed-control-gui`
-- **Home** shows the connection state, live CPU/GPU/fan values and a temperature history graph
+- **Home** shows the connection state, the maximum the filters match, the fan speed, every filter with its current reading and sensor (the one giving the maximum is marked with ▶, one matching nothing is red), and a history graph of the maximum
   (ten minutes by default, adjustable in Settings -> Display)
 - **Settings** covers every configuration key, one card per section, with a search box across them:
   - **Curve** is the fan curve editor. The temperature axis is broken at 30 °C: below that nothing
@@ -155,8 +149,9 @@ Everything is optional: without a config file the app runs on its defaults.
     double-click to add, right-click or `Del` to remove, `Ctrl+Z` to undo. Undo is per session and
     is never written to the config file. Neighbouring points follow along so the curve stays
     monotonic, as in MSI Afterburner
-  - **Sensors** picks the temperature source and the CPU/GPU label filters, and shows how many
-    sensors each filter currently matches — a filter matching nothing reads 0 °C
+  - **Sensors** picks the temperature source and edits its filter list. Type a regular expression,
+    or pick a sensor the source reports now. Each filter shows what it catches, the one that
+    gives the maximum is marked, and a filter that matches nothing is shown in red
   - **Device** holds the serial settings; they take effect on **Reconnect**
   - **Control**, **Logging** and **Display** hold the tuning, log level, graph timeline and the
     start-minimized and minimize-to-tray switches

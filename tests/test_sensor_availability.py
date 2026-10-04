@@ -41,8 +41,6 @@ def fast_loop(monkeypatch):
     monkeypatch.setattr(CONFIG.control, "delay", 0.01)
     monkeypatch.setattr(CONFIG.control, "resync_every", 0)
     monkeypatch.setattr(CONFIG.control, "temp_window", 1)
-    monkeypatch.setattr(CONFIG.sensors, "cpu_filter", "CPU")
-    monkeypatch.setattr(CONFIG.sensors, "gpu_filter", "GPU")
 
 
 async def run_briefly(controller, seconds=0.08):
@@ -210,3 +208,10 @@ def test_a_missing_device_still_reads_as_disconnected(panel):
 
     assert "Disconnected" in panel.status_label.cget("text")
     assert panel.shell.healthy == [False]
+
+
+def test_a_failing_control_loop_turns_the_tray_red_and_says_so(panel):
+    panel._apply_status(connected=True, running=True, sensors_ok=True, loop_ok=False)
+
+    assert panel.shell.healthy == [False], "the fan is not being driven while ticks fail"
+    assert "Control loop error" in panel.status_label.cget("text")

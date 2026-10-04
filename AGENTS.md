@@ -11,12 +11,15 @@ driven by Windows CPU/GPU temperatures. Windows only. Python 3.14 (`requires-pyt
 | Path | What lives there |
 | --- | --- |
 | `controller.py` | `SpeedController`: the async control loop, mode, curve, smoothing, reconnect |
-| `entities/serial_device.py` | async serial I/O; `dimmer.py` adds `read/set_dimmer_value` |
+| `entities/fan.py` | `FanDevice`, what the controller needs from any fan: connect, `read_speed`, `set_speed` |
+| `entities/tasmota_fan.py` | `TasmotaSerialFan`, the one implementation: Tasmota console on a serial port, finds a moved port |
+| `entities/serial_device.py` | async serial I/O under it |
 | `sensors/` | one module per temperature source, behind the `SensorProvider` protocol |
 | `util/config.py` | the whole configuration layer; `CONFIG` is the live object |
 | `util/logger.py` | `configure_logging`, `reconfigure`; the only owner of global logging state |
 | `util/tools.py` | `MedianSmoother`, `curve_to_ranges`, `calculate_dimmer_value` |
-| `gui/` | `app` (shell + tray), `status` (Home), `settings`, `curve_editor`, `history`, `nav`, `theme` |
+| `util/filters.py` | the filter list: `select` picks the hottest reading the filters match |
+| `gui/` | `app` (shell + tray), `status` (Home), `settings`, `filter_list`, `filter_readings`, `curve_editor`, `history`, `nav`, `theme` |
 | `entrypoints/` | `cli.py` and `gui.pyw`; the only place allowed to configure logging |
 
 ## Configuration
@@ -58,7 +61,8 @@ builds `"<hardware>/<sensor>"` because bare sensor names are neither.
   still reachable prints "Win32 exception occurred releasing IUnknown".
 - `ruff check .` does not scan `.pyw`; `gui.pyw` is covered by pre-commit.
 - LibreHardwareMonitor's `/data.json` formats numbers in the system locale (`"63,0 °C"`), reuses
-  sensor names, and reports `Distance to TjMax`, which falls as the chip heats.
+  sensor names, and reports `Distance to TjMax`, which falls as the chip heats. The sources drop it and
+  the limits through `sensors.base.is_live_temperature`; the e2e probes keep their own list on purpose.
 
 ## Tests
 

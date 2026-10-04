@@ -8,8 +8,10 @@ the controller then reported as "changed outside this app" while being the only 
 from collections import deque
 
 import pytest
+from serial.serialutil import SerialException
 
-from iets_speed_control.entities.dimmer import Dimmer
+from iets_speed_control.entities.tasmota_fan import TasmotaSerialFan
+from iets_speed_control.util.config import CONFIG
 
 pytestmark = pytest.mark.filterwarnings("ignore::RuntimeWarning")
 
@@ -49,7 +51,7 @@ class FakeSerial:
 
 @pytest.fixture
 def device(monkeypatch):
-    """A Dimmer talking to the stub, with the inter-command wait removed to keep the test quick."""
+    """A Tasmota fan talking to the stub, with the inter-command wait removed to keep the test quick."""
     from iets_speed_control.entities import serial_device
 
     async def no_wait(_seconds):
@@ -57,7 +59,7 @@ def device(monkeypatch):
 
     monkeypatch.setattr(serial_device.asyncio, "sleep", no_wait)
 
-    dimmer = Dimmer(port="FAKE", dimmer_command="Dimmer")
+    dimmer = TasmotaSerialFan(port="FAKE", dimmer_command="Dimmer")
     dimmer.serial = FakeSerial()
     return dimmer
 
@@ -66,24 +68,24 @@ def device(monkeypatch):
 
 
 async def test_a_read_after_one_write_returns_that_value(device):
-    await device.set_dimmer_value(66)
+    await device.set_speed(66)
 
-    assert await device.read_dimmer_value() == 66
+    assert await device.read_speed() == 66
 
 
 async def test_replies_left_by_earlier_writes_are_not_mistaken_for_the_answer(device):
     """Three writes in a row leave three unread replies; the query must still answer for itself."""
     for value in (72, 69, 66):
-        await device.set_dimmer_value(value)
+        await device.set_speed(value)
 
-    assert await device.read_dimmer_value() == 66, "this is the value that looked like an outside change"
+    assert await device.read_speed() == 66, "this is the value that looked like an outside change"
 
 
 async def test_stale_replies_are_discarded_rather_than_accumulating(device):
     for value in (72, 69, 66):
-        await device.set_dimmer_value(value)
+        await device.set_speed(value)
 
-    await device.read_dimmer_value()
+    await device.read_speed()
 
     assert device.serial.discards == 3, "the replies to those writes have to be dropped, not queued"
     assert not device.serial.pending, "nothing may be left for the next query to pick up"
@@ -106,19 +108,19 @@ async def test_the_newest_reply_wins_when_a_query_answers_more_than_once(device)
         b'00:00:01.000 RSL: RESULT = {"Dimmer":22}\n',
     )
 
-    assert await device.read_dimmer_value() == 22
+    assert await device.read_speed() == 22
 
 
 async def test_a_reply_for_another_field_is_ignored(device):
     answers_with(device, b'00:00:01.000 RSL: RESULT = {"POWER":"ON"}\n')
 
-    assert await device.read_dimmer_value() is None
+    assert await device.read_speed() is None
 
 
 async def test_no_reply_at_all_reads_as_unknown(device):
     answers_with(device)
 
-    assert await device.read_dimmer_value() is None
+    assert await device.read_speed() is None
 
 
 async def test_a_query_with_no_answer_does_not_fall_back_to_a_stale_reply(device):
@@ -127,16 +129,16 @@ async def test_a_query_with_no_answer_does_not_fall_back_to_a_stale_reply(device
     When the device does not answer, the newest thing in the buffer is a reply to an earlier write,
     and reporting that as the current value is how the false "changed outside this app" appeared.
     """
-    await device.set_dimmer_value(66)
+    await device.set_speed(66)
     answers_with(device)  # the device stays silent this time
 
-    assert await device.read_dimmer_value() is None
+    assert await device.read_speed() is None
 
 
 async def test_noise_on_the_line_does_not_become_a_value(device):
     answers_with(device, b"boot: rst cause 1, boot mode 3\n", b"00:00:01.000 RSL: RESULT = {broken\n")
 
-    assert await device.read_dimmer_value() is None
+    assert await device.read_speed() is None
 
 
 # --- the controller stops crying wolf -------------------------------------------------------------
@@ -171,3 +173,124 @@ class _FixedSensors:
 
     def get_temperatures(self):
         return {"CPU": 70.0, "GPU": 70.0}
+
+
+# --- whether the port is usable ---------------------------------------------------------------
+
+
+class ProbedSerial:
+    """A port whose state the test sets, and whose in_waiting can fail the way a lost adapter does."""
+
+    def __init__(self, is_open=True, closed=False, error=None):
+        self.is_open = is_open
+        self.closed = closed
+        self.error = error
+
+    @property
+    def in_waiting(self):
+        if self.error:
+            raise self.error
+        return 0
+
+
+@pytest.mark.parametrize(
+    ("serial", "expected"),
+    [
+        (None, False),
+        (ProbedSerial(is_open=False), False),
+        (ProbedSerial(closed=True), False),
+        (
+            ProbedSerial(error=SerialException("ClearCommError failed (PermissionError(13, 'Access is denied.'))")),
+            False,
+        ),
+        # Any failure to read the port means it cannot drive the fan, not only "Access is denied".
+        (
+            ProbedSerial(error=SerialException("ClearCommError failed (OSError(22, 'The device does not recognize'))")),
+            False,
+        ),
+        (ProbedSerial(), True),
+    ],
+    ids=["no port", "not open", "closed", "access denied", "other error", "usable"],
+)
+def test_connected_means_the_port_can_be_used(serial, expected):
+    device = TasmotaSerialFan(port="COM_TEST")
+    device.serial = serial
+
+    assert device.connected is expected
+
+
+# --- finding the device when its port moved ----------------------------------------------------
+
+
+class PortInfo:
+    def __init__(self, device, description="", serial_number=None):
+        self.device = device
+        self.description = description
+        self.serial_number = serial_number
+
+
+@pytest.fixture
+def ports(monkeypatch):
+    """Ports the system lists, and which of them actually open."""
+    from iets_speed_control.entities import serial_device, tasmota_fan
+
+    state = {"listed": [], "opens": set(), "tried": []}
+
+    async def fake_connect(self):
+        state["tried"].append(self.port)
+        return self.port in state["opens"]
+
+    monkeypatch.setattr(serial_device.SerialDevice, "connect", fake_connect)
+    monkeypatch.setattr(tasmota_fan, "comports", lambda: state["listed"])
+    monkeypatch.setattr(CONFIG.device, "name", "CH9102")
+    monkeypatch.setattr(CONFIG.device, "serial", None)
+    return state
+
+
+async def test_the_configured_port_is_tried_first_and_alone_when_it_opens(ports):
+    ports["opens"] = {"COM7"}
+    ports["listed"] = [PortInfo("COM9", "USB-Enhanced-SERIAL CH9102")]
+    fan = TasmotaSerialFan(port="COM7")
+
+    assert await fan.connect()
+    assert ports["tried"] == ["COM7"], "no search while the configured port works"
+
+
+async def test_a_moved_device_is_found_by_its_description(ports):
+    ports["opens"] = {"COM9"}
+    ports["listed"] = [PortInfo("COM3", "Bluetooth"), PortInfo("COM9", "USB-Enhanced-SERIAL CH9102")]
+    fan = TasmotaSerialFan(port="COM7")
+
+    assert await fan.connect()
+    assert fan.port == "COM9"
+    assert ports["tried"] == ["COM7", "COM9"]
+
+
+async def test_the_serial_number_wins_over_the_description(ports, monkeypatch):
+    monkeypatch.setattr(CONFIG.device, "serial", "568B")
+    ports["opens"] = {"COM5"}
+    ports["listed"] = [
+        PortInfo("COM9", "USB-Enhanced-SERIAL CH9102", "OTHER"),
+        PortInfo("COM5", "USB-Enhanced-SERIAL CH9102", "568B022419"),
+    ]
+    fan = TasmotaSerialFan(port="COM7")
+
+    assert await fan.connect()
+    assert fan.port == "COM5"
+
+
+async def test_nothing_found_leaves_the_port_alone(ports):
+    ports["listed"] = [PortInfo("COM3", "Bluetooth")]
+    fan = TasmotaSerialFan(port="COM7")
+
+    assert not await fan.connect()
+    assert fan.port == "COM7"
+    assert ports["tried"] == ["COM7"]
+
+
+async def test_finding_the_same_port_again_does_not_retry_it(ports):
+    ports["listed"] = [PortInfo("COM7", "USB-Enhanced-SERIAL CH9102")]
+    fan = TasmotaSerialFan(port="COM7")
+
+    assert not await fan.connect()
+    assert ports["tried"] == ["COM7"]

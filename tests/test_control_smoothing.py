@@ -19,6 +19,9 @@ class FakeDevice:
     port = "FAKE"
     connected = True
 
+    def describe(self):
+        return self.port
+
     def __init__(self, value: int = 0):
         self.value = value
         self.reads = 0
@@ -30,11 +33,11 @@ class FakeDevice:
     async def disconnect(self):
         pass
 
-    async def read_dimmer_value(self):
+    async def read_speed(self):
         self.reads += 1
         return self.value
 
-    async def set_dimmer_value(self, value):
+    async def set_speed(self, value):
         self.value = value
         self.writes.append(value)
 
@@ -58,8 +61,6 @@ class ScriptedSensors:
 def controller_env(monkeypatch):
     """Deterministic, fast control-loop settings."""
     monkeypatch.setattr(CONFIG.control, "delay", 0.01)
-    monkeypatch.setattr(CONFIG.sensors, "cpu_filter", "CPU")
-    monkeypatch.setattr(CONFIG.sensors, "gpu_filter", "GPU")
     monkeypatch.setattr(CONFIG.control, "max_step", 100)
     monkeypatch.setattr(CONFIG.control, "ignore_less_than", 0)
     # Linear 0..100 C -> 0..50 %, so a temperature maps to a predictable percentage.
@@ -212,4 +213,4 @@ async def test_fractional_readings_are_rounded_not_truncated(controller_env, mon
 
     await run_loop(controller, ticks=3)
 
-    assert controller.cpu_temp == 61
+    assert controller.max_temp == 61

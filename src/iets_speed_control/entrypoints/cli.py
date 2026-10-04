@@ -14,15 +14,14 @@ async def _cli():
     controller = SpeedController()
     initial = True
 
-    def on_status(connected, running):
+    # The controller reports (connected, running, sensors_ok, loop_ok); the console only needs the first.
+    def on_status(connected, *_rest):
         nonlocal initial
         if initial and connected:
-            logger.info(
-                f"Starting with CPU: {controller.cpu_temp}, GPU: {controller.gpu_temp}. Fan: {controller.current_speed}"
-            )
+            logger.info(f"Starting with max {controller.max_temp} °C. Fan: {controller.current_speed}")
             initial = False
         elif not connected:
-            logger.info(f"No device connected. CPU: {controller.cpu_temp}, GPU: {controller.gpu_temp}")
+            logger.info(f"No device connected. Max: {controller.max_temp} °C")
 
     controller.set_callbacks(on_status_change=on_status)
 

@@ -1,5 +1,6 @@
 """Temperature sources. Pick one with the sensors.provider configuration key."""
 
+from ..util.source_names import canonical_source
 from .aida64 import Aida64Provider
 from .base import SensorProvider, lacks_admin_rights
 from .lenovo_wmi import LenovoWmiProvider
@@ -19,23 +20,10 @@ PROVIDERS = {
 PROVIDER_LABELS = {name: provider.label for name, provider in PROVIDERS.items()}
 PROVIDER_NAMES = {label: name for name, label in PROVIDER_LABELS.items()}
 
-ALIASES = {
-    "aida": Aida64Provider.name,
-    "librehardwaremonitor": LibreHardwareMonitorProvider.name,
-    "openhardwaremonitor": LibreHardwareMonitorProvider.name,
-    "ohm": LibreHardwareMonitorProvider.name,
-    "lhm_web": LibreHardwareMonitorWebProvider.name,
-    "lhmweb": LibreHardwareMonitorWebProvider.name,
-    "lhm-http": LibreHardwareMonitorWebProvider.name,
-    "lenovo_wmi": LenovoWmiProvider.name,
-    "lenovo": LenovoWmiProvider.name,
-}
-
 
 def find_provider(name: str) -> type[SensorProvider] | None:
     """The class of the temperature source named by sensors.provider, aliases included, or None."""
-    key = (name or "").strip().lower()
-    return PROVIDERS.get(ALIASES.get(key, key))
+    return PROVIDERS.get(canonical_source(name))
 
 
 def create_provider(name: str) -> SensorProvider:
