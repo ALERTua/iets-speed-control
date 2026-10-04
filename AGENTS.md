@@ -17,7 +17,7 @@ driven by Windows CPU/GPU temperatures. Windows only. Python 3.14 (`requires-pyt
 | `util/logger.py` | `configure_logging`, `reconfigure`; the only owner of global logging state |
 | `util/tools.py` | `MedianSmoother`, `curve_to_ranges`, `calculate_dimmer_value` |
 | `util/filters.py` | the filter list: `select` picks the hottest reading the filters match |
-| `gui/` | `app` (shell + tray), `status` (Home), `settings`, `filter_list`, `curve_editor`, `history`, `nav`, `theme` |
+| `gui/` | `app` (shell + tray), `status` (Home), `settings`, `filter_list`, `filter_readings`, `curve_editor`, `history`, `nav`, `theme` |
 | `entrypoints/` | `cli.py` and `gui.pyw`; the only place allowed to configure logging |
 
 ## Configuration
