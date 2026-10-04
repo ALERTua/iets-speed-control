@@ -1,7 +1,7 @@
 """GUI entrypoint. Everything of substance lives in the iets_speed_control.gui package."""
 
-from ..gui import GUIApp  # type: ignore[unresolved-import]
-from ..util.logger import configure_logging  # type: ignore[unresolved-import]
+from ..gui import GUIApp  # ty: ignore[unresolved-import] -- a .pyw file is not a module to ty
+from ..util.logger import configure_logging  # ty: ignore[unresolved-import]
 
 
 def gui():

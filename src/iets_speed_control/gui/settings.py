@@ -20,6 +20,7 @@ import os
 import queue
 import threading
 from collections.abc import Callable
+from concurrent.futures import Future
 from pathlib import Path
 from tkinter import TclError
 
@@ -108,6 +109,13 @@ def parse_plain(text: str) -> str:
 
 class SettingsRow:
     """One row inside a card: title, description and any error on the left, control on the right."""
+
+    # The row builders attach the typed control under its own name, so callers need no cast. Only the
+    # one matching the kind of row exists on a given instance.
+    entry: ctk.CTkEntry
+    menu: ctk.CTkOptionMenu
+    combo: ctk.CTkComboBox
+    switch: ctk.CTkSwitch
 
     def __init__(self, card, title, subtitle, control, row_index):
         self.title = title
@@ -210,7 +218,7 @@ class SettingsView(ctk.CTkFrame):
         controller: SpeedController,
         on_history_window: Callable[[int], None] | None = None,
         history_window: int = HISTORY_WINDOW_SECONDS,
-        on_reconnect: Callable[[], object] | None = None,
+        on_reconnect: Callable[[], Future | None] | None = None,
     ):
         super().__init__(master, fg_color=BACKGROUND)
         self.controller = controller
@@ -683,7 +691,7 @@ class SettingsView(ctk.CTkFrame):
             "sensors.provider",
             sorted(PROVIDER_NAMES),
             # The menu shows the product name; the file keeps the code name.
-            display=lambda name: PROVIDER_LABELS.get(name, name),
+            display=lambda name: PROVIDER_LABELS.get(str(name), str(name)),
             parse=lambda label: PROVIDER_NAMES.get(label, label),
             width=260,
             apply=self._apply_provider,

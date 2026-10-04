@@ -186,20 +186,23 @@ class GUIApp:
             self._switch(SETTINGS)
         elif key.startswith("settings:"):
             self._switch(SETTINGS)
-            self.settings_view.show(key.split(":", 1)[1])
+            if self.settings_view:
+                self.settings_view.show(key.split(":", 1)[1])
 
     def show_settings(self, icon=None, item=None):
         """Select the Settings destination. Safe to call from the tray thread."""
-        if self.window:
-            self.window.after(0, lambda: self.rail.select(SETTINGS))
+        if self.window and self.rail:
+            rail = self.rail
+            self.window.after(0, lambda: rail.select(SETTINGS))
             self._show_window()
 
     def show_home(self, icon=None, item=None):
-        if self.window:
-            self.window.after(0, lambda: self.rail.select(HOME))
+        if self.window and self.rail:
+            rail = self.rail
+            self.window.after(0, lambda: rail.select(HOME))
 
     def _switch(self, view):
-        if not self.window or view == self.view:
+        if not self.window or not self.status_panel or not self.settings_view or view == self.view:
             return
 
         self.view = view

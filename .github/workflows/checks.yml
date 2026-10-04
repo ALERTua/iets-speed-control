@@ -1,0 +1,38 @@
+name: Checks
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - "main"
+    paths-ignore:
+      - '**.md'
+      - '**.png'
+
+  pull_request:
+
+
+jobs:
+  checks:
+    name: Checks (Windows, Python 3.14)
+    # The app talks to WMI and Windows serial ports, and its tests import pywin32 and drive Tk, so
+    # only a Windows runner can run them.
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.2.0
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-python: true
+          python-version: "3.14"
+
+      - name: Install the project
+        run: uv sync --locked --dev
+
+      # The same hooks as a local commit: ruff, ty, the test suite and the lock-file check.
+      - name: Pre-commit on all files
+        run: uv run pre-commit run --all-files
