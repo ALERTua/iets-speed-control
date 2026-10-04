@@ -210,3 +210,10 @@ def test_a_missing_device_still_reads_as_disconnected(panel):
 
     assert "Disconnected" in panel.status_label.cget("text")
     assert panel.shell.healthy == [False]
+
+
+def test_a_failing_control_loop_turns_the_tray_red_and_says_so(panel):
+    panel._apply_status(connected=True, running=True, sensors_ok=True, loop_ok=False)
+
+    assert panel.shell.healthy == [False], "the fan is not being driven while ticks fail"
+    assert "Control loop error" in panel.status_label.cget("text")

@@ -58,6 +58,8 @@ class SpeedController:
         self._sensors_ok = True
         # Whether the previous tick raised, so a lasting fault is reported once rather than every tick.
         self._tick_failing = False
+        # The same for a fault outside the tick, in the loop's own reporting or waiting.
+        self._iteration_failing = False
 
         # The value we last wrote is the source of truth; the device is only re-read on
         # (re)connect and every RESYNC_EVERY ticks, to catch changes made outside this app.
@@ -229,7 +231,7 @@ class SpeedController:
     def _notify_status(self):
         """Notify status change callback."""
         if self._on_status_change:
-            self._on_status_change(self._connected, self._running, self._sensors_ok)
+            self._on_status_change(self._connected, self._running, self._sensors_ok, self.loop_ok)
 
     def _notify_temps(self):
         """Notify temperature change callback."""
@@ -368,58 +370,76 @@ class SpeedController:
                 try:
                     await self._run_tick()
                     await asyncio.sleep(CONFIG.control.delay)
-                except Exception:
-                    logger.exception(f"Error in the control loop itself; retrying in {RETRY_DELAY} s")
+                except Exception as e:  # noqa: BLE001 -- the last line of defence for the loop itself
+                    self._iteration_failed(e)
                     await asyncio.sleep(RETRY_DELAY)
+                else:
+                    self._iteration_succeeded()
 
         except asyncio.CancelledError:
             logger.debug("Control loop cancelled")
             raise
 
+    def _iteration_failed(self, error: Exception):
+        """Report a fault outside the tick once with its traceback, like a tick fault."""
+        if self._iteration_failing:
+            logger.debug(f"Control loop failed again: {error!r}")
+            return
+
+        self._iteration_failing = True
+        logger.error(f"Error in the control loop itself; retrying every {RETRY_DELAY} s", exc_info=error)
+
+    def _iteration_succeeded(self):
+        if self._iteration_failing:
+            self._iteration_failing = False
+            logger.info("Control loop itself is working again")
+
     async def _run_tick(self):
         """Run one tick and report how it went."""
         try:
-            drove_the_fan = await self._tick()
+            await self._tick()
         except Exception as e:  # noqa: BLE001 -- whatever a tick raises, the next tick must still run
             self._tick_failed(e)
-            return
-
-        # A tick that skipped its work (no device, no temperatures) is not a recovery: those cases
-        # report themselves through the connection and sensor status.
-        if drove_the_fan:
+        else:
             self._tick_succeeded()
 
-    def _tick_failed(self, error: Exception):
-        """Report a failing tick once with its traceback, not once a second for as long as it fails."""
-        was_connected = self._connected
-        self._connected = False
-        # After an error the device state is unknown, so the next good tick re-reads it.
-        self._last_sent = None
-        self._ticks_since_resync = 0
+    @property
+    def loop_ok(self) -> bool:
+        """Whether the last tick ran without an unexpected error."""
+        return not self._tick_failing
 
-        if not self._tick_failing:
-            self._tick_failing = True
-            logger.error("Error in control loop; skipping this tick and trying again", exc_info=error)
-            self._notify_status()
+    def _tick_failed(self, error: Exception):
+        """Report a failing tick once with its traceback, not once a second for as long as it fails.
+
+        The link state stays what the device says: a fault in the sensors or in the GUI says nothing
+        about the serial port, and the status carries the fault on its own.
+        """
+        if self._tick_failing:
+            logger.debug(f"Control tick failed again: {error!r}")
             return
 
-        logger.debug(f"Control tick failed again: {error!r}")
-        if was_connected:
-            # Something marked the link up meanwhile, a Reconnect from Settings for one; say it is down.
-            self._notify_status()
+        self._tick_failing = True
+        logger.error("Error in control loop; skipping this tick and trying again", exc_info=error)
+        self._notify_status()
 
     def _tick_succeeded(self):
+        """A tick that ran to its end without an unexpected error ends a fault.
+
+        It may still have skipped its work, for a source with no temperatures for one; that is reported
+        through the sensor status, not as a loop fault.
+        """
         if self._tick_failing:
             self._tick_failing = False
-            self._connected = True
             logger.info("Control loop is working again")
             self._notify_status()  # the failure turned the tray red; this turns it back
 
-    async def _tick(self) -> bool:
-        """Read the temperatures once and bring the fan to the speed they call for.
+    def _forget_device_value(self):
+        """Drop the cached dimmer value so the next exchange reads the real one."""
+        self._last_sent = None
+        self._ticks_since_resync = 0
 
-        Returns whether it got as far as driving the fan.
-        """
+    async def _tick(self):
+        """Read the temperatures once and bring the fan to the speed they call for."""
         # Attempt connection if not connected
         if not self.device.connected:
             await self._connect()
@@ -427,15 +447,11 @@ class SpeedController:
         if not self.device.connected:
             self._connected = False
             # Forget the cached value so the next connection re-reads the real one.
-            self._last_sent = None
-            self._ticks_since_resync = 0
+            self._forget_device_value()
             self._notify_status()
-            return False
+            return
 
-        # While ticks keep failing the link stays reported down: marking it up here, before the tick
-        # fails again, would show Settings a connection that drives nothing.
-        if not self._tick_failing:
-            self._connected = True
+        self._connected = True
 
         # Read temperatures. WMI is blocking, so keep it off the event loop.
         try:
@@ -443,7 +459,7 @@ class SpeedController:
         except Exception as e:  # noqa: BLE001 -- WMI/COM raise arbitrary types; a source error is not a loop error
             logger.error(f"Error reading sensors: {e}")
             self._set_sensors_ok(False)
-            return False
+            return
 
         # An empty result is how every provider reports "I cannot reach my app".
         self._set_sensors_ok(bool(sensors))
@@ -464,6 +480,16 @@ class SpeedController:
             )
         self._notify_temps()
 
+        try:
+            await self._drive_fan()
+        except Exception:
+            # The device was in the middle of an exchange, so its state is unknown: the next tick reads
+            # it again. A fault anywhere else keeps the cached value and spares the serial round trip.
+            self._forget_device_value()
+            raise
+
+    async def _drive_fan(self):
+        """Bring the fan to the speed the current temperatures, or Manual mode, call for."""
         current_dimmer = await self._current_dimmer()
 
         # Calculate new speed based on mode
@@ -494,8 +520,6 @@ class SpeedController:
         elif current_dimmer is not None:
             self._current_speed = current_dimmer
             self._notify_speed()
-
-        return True
 
     async def shutdown(self):
         """Shutdown the controller gracefully."""

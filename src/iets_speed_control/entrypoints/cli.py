@@ -14,7 +14,8 @@ async def _cli():
     controller = SpeedController()
     initial = True
 
-    def on_status(connected, running):
+    # The controller reports (connected, running, sensors_ok, loop_ok); the console only needs the first.
+    def on_status(connected, *_rest):
         nonlocal initial
         if initial and connected:
             logger.info(
