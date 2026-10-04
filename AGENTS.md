@@ -58,7 +58,8 @@ builds `"<hardware>/<sensor>"` because bare sensor names are neither.
   still reachable prints "Win32 exception occurred releasing IUnknown".
 - `ruff check .` does not scan `.pyw`; `gui.pyw` is covered by pre-commit.
 - LibreHardwareMonitor's `/data.json` formats numbers in the system locale (`"63,0 °C"`), reuses
-  sensor names, and reports `Distance to TjMax`, which falls as the chip heats.
+  sensor names, and reports `Distance to TjMax`, which falls as the chip heats. The sources drop it and
+  the limits through `sensors.base.is_live_temperature`; the e2e probes keep their own list on purpose.
 
 ## Tests
 

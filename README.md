@@ -102,11 +102,7 @@ poll as `rejected the credentials`, and any `user:password@` embedded in the URL
 Labels are `<hardware>/<sensor>`, for example `NVIDIA GeForce RTX 4090 Laptop GPU/GPU Hot Spot`. Open
 `sensors.lhm_web.url` in a browser to see the exact labels your machine reports.
 
-Keep the filters narrow. LibreHardwareMonitor reports two kinds of entry under the same Temperature type that
-are not live temperatures: `Distance to TjMax`, which *falls* as the chip heats up, and fixed limits such as
-`Critical Temperature` or `Thermal Sensor High Limit`. A filter that catches either drives the fan from the
-wrong number — a `Distance to TjMax` of 60 on an idle CPU would spin the fan up for nothing. The defaults
-`cpu_filter: CPU` and `gpu_filter: GPU` avoid both.
+LibreHardwareMonitor also reports entries under the Temperature type that are not live temperatures: `Distance to TjMax`, which *falls* as the chip heats up, fixed limits such as `Critical Temperature` or `Thermal Sensor High Limit`, and `Temperature Sensor Resolution`. Both LibreHardwareMonitor sources drop them, so no filter can drive the fan from one of them. They are still visible in the LibreHardwareMonitor window.
 
 #### Lenovo Legion Preparation (`sensors.provider: lenovo-wmi`)
 

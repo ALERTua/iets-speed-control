@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 
 from ..util.config import CONFIG
-from .base import to_temperature
+from .base import is_live_temperature, to_temperature
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ class LibreHardwareMonitorWebProvider:
                 self._collect(child, trail, output)
             return
 
-        if node.get("Type") != self.SENSOR_TYPE:
+        if node.get("Type") != self.SENSOR_TYPE or not is_live_temperature(node.get("Text", "")):
             return
 
         temperature = parse_value(node.get("Value"))
