@@ -41,7 +41,7 @@ from ..util.config import (
 )
 from ..util.config import defaults as config_defaults
 from ..util.config import save as save_config
-from ..util.filters import DEFAULT_FILTERS, select
+from ..util.filters import DEFAULT_FILTERS, Selection, select
 from ..util.logger import default_log_file
 from ..util.logger import reconfigure as reapply_log_settings
 from .curve_editor import CurveEditor
@@ -256,6 +256,9 @@ class SettingsView(ctk.CTkFrame):
         self.sections: dict[str, SettingsSection] = {}
         self.active: str | None = None
         self.lhm_rows: list[SettingsRow] = []
+        # Numbers each sensor read, so a read that finishes after the source or the filters changed
+        # can be recognised as stale and dropped instead of painting an old verdict over the new state.
+        self._match_request = 0
 
         self._build_body()
         self._build_curve_section()
@@ -790,8 +793,10 @@ class SettingsView(ctk.CTkFrame):
             self._show_filter_error(str(e))
             return
 
-        # Each source keeps its own filters, so the list follows the source.
+        # Each source keeps its own filters, so the list follows the source. Whatever the old source
+        # read or failed to read says nothing about this one, so its verdict goes too.
         self._redisplay_filters()
+        self._show_filter_error(None)
         self.refresh_sensor_match()
 
     def _on_provider_reset(self):
@@ -836,10 +841,22 @@ class SettingsView(ctk.CTkFrame):
 
     def refresh_sensor_match(self):
         """Read the active source once, offer its sensors as filters, and show what each filter catches."""
-        self._in_background(self.controller.sensors.get_temperatures, self._show_sensor_match)
+        self._match_request += 1
+        request = self._match_request
+        self._in_background(
+            self.controller.sensors.get_temperatures,
+            lambda ok, payload: self._show_sensor_match(ok, payload, request),
+        )
 
-    def _show_sensor_match(self, ok: bool, payload):
+    def _show_sensor_match(self, ok: bool, payload, request: int | None = None):
+        """Redraw the whole verdict from this one read, so nothing from an earlier read survives it."""
+        if request is not None and request != self._match_request:
+            logger.debug(f"Dropping sensor read #{request}; #{self._match_request} is the current one")
+            return
+
+        self._show_filter_error(None)
         if not ok:
+            self.filter_list.show_selection(Selection())
             self._show_filter_error(f"Reading {self.controller.sensors.name} failed: {payload}")
             return
 
