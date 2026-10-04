@@ -6,7 +6,7 @@ drawn and hit-tested by hand.
 
 import customtkinter as ctk
 
-from .theme import CARD, CPU_COLOR, CURVE_LINE, GRID, MUTED
+from .theme import ACCENT_COLOR, CARD, CURVE_LINE, GRID, MUTED
 
 TEMP_MIN, TEMP_MAX = 0, 100
 PCT_MIN, PCT_MAX = 0, 100
@@ -205,7 +205,7 @@ class CurveEditor(ctk.CTkFrame):
         for index, (temp, pct) in enumerate(self.points):
             x, y = self.to_pixels(temp, pct)
             radius = 9 if index == self.selected else 5
-            canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill=CPU_COLOR, outline="")
+            canvas.create_oval(x - radius, y - radius, x + radius, y + radius, fill=ACCENT_COLOR, outline="")
 
         if notify and self.on_change:
             self.on_change(list(self.points), self.selected)

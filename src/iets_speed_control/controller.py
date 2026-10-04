@@ -10,7 +10,8 @@ from serial.tools.list_ports_windows import comports
 
 from .entities.dimmer import Dimmer
 from .sensors import SensorProvider, create_provider
-from .util.config import CONFIG
+from .util.config import CONFIG, filters_for
+from .util.filters import Selection, select
 from .util.tools import MedianSmoother, calculate_dimmer_value, curve_to_ranges
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ class SpeedController:
     """
     Manages fan speed control with auto and manual modes.
 
-    In AUTO mode, fan speed is calculated from CPU/GPU temperatures.
+    In AUTO mode, fan speed follows the hottest reading the source's filters match.
     In MANUAL mode, fan speed is set directly by the user.
     """
 
@@ -49,8 +50,9 @@ class SpeedController:
         self._on_speed_change: Callable | None = None
 
         # Current status
-        self._cpu_temp = 0
-        self._gpu_temp = 0
+        # The smoothed maximum drives the curve; the selection says which filter and sensor gave it.
+        self._max_temp = 0
+        self._selection = Selection()
         self._current_speed = 0
         self._connected = False
         # Whether the temperature source answered at all. A provider that cannot reach its app
@@ -67,8 +69,7 @@ class SpeedController:
         self._ticks_since_resync = 0
 
         self._temp_window = max(1, int(CONFIG.control.temp_window))
-        self._cpu_smoother = MedianSmoother(self._temp_window)
-        self._gpu_smoother = MedianSmoother(self._temp_window)
+        self._smoother = MedianSmoother(self._temp_window)
 
         # The curve is editable at runtime from the GUI. Configuration only seeds it.
         self._curve = [(float(temperature), float(percent)) for temperature, percent in CONFIG.control.curve]
@@ -130,14 +131,14 @@ class SpeedController:
         self._notify_status()
 
     @property
-    def cpu_temp(self) -> int:
-        """Current CPU temperature."""
-        return self._cpu_temp
+    def max_temp(self) -> int:
+        """The smoothed hottest reading the filters match: what the curve is evaluated at."""
+        return self._max_temp
 
     @property
-    def gpu_temp(self) -> int:
-        """Current GPU temperature."""
-        return self._gpu_temp
+    def selection(self) -> Selection:
+        """Every filter's latest raw match, and which one holds the maximum."""
+        return self._selection
 
     @property
     def current_speed(self) -> int:
@@ -203,14 +204,13 @@ class SpeedController:
         self._reset_smoothers()
         logger.debug(f"Smoothing window is now {size}")
 
-    def _reset_smoothers(self):
-        """Fresh smoothers sized to the current window.
+    def _describe_hottest(self) -> str:
+        hottest = self._selection.hottest
+        return f"{hottest.label} via {hottest.pattern!r}" if hottest else "no filter matched"
 
-        Both are replaced one after the other rather than atomically: a tick landing in between
-        sees one new and one old smoother, which costs nothing because they are independent.
-        """
-        self._cpu_smoother = MedianSmoother(self._temp_window)
-        self._gpu_smoother = MedianSmoother(self._temp_window)
+    def _reset_smoothers(self):
+        """A fresh smoother sized to the current window, published with a single assignment."""
+        self._smoother = MedianSmoother(self._temp_window)
 
     @property
     def port(self) -> str | None:
@@ -236,7 +236,7 @@ class SpeedController:
     def _notify_temps(self):
         """Notify temperature change callback."""
         if self._on_temps_change:
-            self._on_temps_change(self._cpu_temp, self._gpu_temp)
+            self._on_temps_change(self._max_temp, self._selection)
 
     def _notify_speed(self):
         """Notify speed change callback."""
@@ -464,20 +464,16 @@ class SpeedController:
         # An empty result is how every provider reports "I cannot reach my app".
         self._set_sensors_ok(bool(sensors))
 
-        cpu_temps = [v for k, v in sensors.items() if CONFIG.sensors.cpu_filter in k]
-        gpu_temps = [v for k, v in sensors.items() if CONFIG.sensors.gpu_filter in k]
+        self._selection = select(sensors, filters_for(CONFIG, self.sensors.name))
+        # Nothing matched reads as 0 °C, which holds the fan at the curve's floor; Settings shows which
+        # filters match nothing, so that state is visible rather than silent.
+        raw = self._selection.max_value or 0
 
         # Round rather than truncate: sources such as the LibreHardwareMonitor web
         # server report fractions, and int() would bias every reading downwards.
-        raw_cpu = max(cpu_temps or [0])
-        raw_gpu = max(gpu_temps or [0])
-        self._cpu_temp = round(self._cpu_smoother.add(raw_cpu))
-        self._gpu_temp = round(self._gpu_smoother.add(raw_gpu))
-        if (raw_cpu, raw_gpu) != (self._cpu_temp, self._gpu_temp):
-            logger.debug(
-                f"Smoothed CPU {raw_cpu} -> {self._cpu_temp}, GPU {raw_gpu} -> {self._gpu_temp}"
-                f" (median of {self._temp_window})"
-            )
+        self._max_temp = round(self._smoother.add(raw))
+        if raw != self._max_temp:
+            logger.debug(f"Smoothed max {raw} -> {self._max_temp} (median of {self._temp_window})")
         self._notify_temps()
 
         try:
@@ -495,9 +491,7 @@ class SpeedController:
         # Calculate new speed based on mode
         if self._mode == Mode.AUTO:
             ranges = self._ranges  # read once: the GUI may swap it mid-tick
-            cpu_dimmer = calculate_dimmer_value(self._cpu_temp, ranges)
-            gpu_dimmer = calculate_dimmer_value(self._gpu_temp, ranges)
-            new_value = max(cpu_dimmer, gpu_dimmer)
+            new_value = calculate_dimmer_value(self._max_temp, ranges)
 
             # Apply step limits
             if current_dimmer is not None and CONFIG.control.max_step:
@@ -513,7 +507,7 @@ class SpeedController:
         # Update speed if changed
         if current_dimmer != new_value:
             logger.info(
-                f"CPU: {self._cpu_temp}, GPU: {self._gpu_temp}. "
+                f"Max: {self._max_temp} ({self._describe_hottest()}). "
                 f"{CONFIG.device.pwm_command}: {current_dimmer} -> {new_value}"
             )
             await self._set_fan_speed(new_value)
