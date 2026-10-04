@@ -8,6 +8,7 @@ the controller then reported as "changed outside this app" while being the only 
 from collections import deque
 
 import pytest
+from serial.serialutil import SerialException
 
 from iets_speed_control.entities.dimmer import Dimmer
 
@@ -171,3 +172,47 @@ class _FixedSensors:
 
     def get_temperatures(self):
         return {"CPU": 70.0, "GPU": 70.0}
+
+
+# --- whether the port is usable ---------------------------------------------------------------
+
+
+class ProbedSerial:
+    """A port whose state the test sets, and whose in_waiting can fail the way a lost adapter does."""
+
+    def __init__(self, is_open=True, closed=False, error=None):
+        self.is_open = is_open
+        self.closed = closed
+        self.error = error
+
+    @property
+    def in_waiting(self):
+        if self.error:
+            raise self.error
+        return 0
+
+
+@pytest.mark.parametrize(
+    ("serial", "expected"),
+    [
+        (None, False),
+        (ProbedSerial(is_open=False), False),
+        (ProbedSerial(closed=True), False),
+        (
+            ProbedSerial(error=SerialException("ClearCommError failed (PermissionError(13, 'Access is denied.'))")),
+            False,
+        ),
+        # Any failure to read the port means it cannot drive the fan, not only "Access is denied".
+        (
+            ProbedSerial(error=SerialException("ClearCommError failed (OSError(22, 'The device does not recognize'))")),
+            False,
+        ),
+        (ProbedSerial(), True),
+    ],
+    ids=["no port", "not open", "closed", "access denied", "other error", "usable"],
+)
+def test_connected_means_the_port_can_be_used(serial, expected):
+    device = Dimmer(port="COM_TEST")
+    device.serial = serial
+
+    assert device.connected is expected

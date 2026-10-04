@@ -142,7 +142,7 @@ dev = [
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "ruff" },
     { name = "rust-just" },
-    { name = "ty", specifier = ">=0.0.84" },
+    { name = "ty", specifier = "==0.0.84" },
 ]
 
 [[package]]

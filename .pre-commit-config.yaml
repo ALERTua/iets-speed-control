@@ -28,6 +28,8 @@ repos:
     hooks:
       - id: ty
         args: [--locked]
+        # ty finds the files itself from [tool.ty.src]; listed files would bypass its exclude
+        pass_filenames: false
 
   - repo: local
     hooks:

@@ -186,6 +186,9 @@ def validate(config: Config) -> Config:
 
     config.control.curve = _validated_curve(config.control.curve)
 
+    if not isinstance(config.sensors.provider, str) or not config.sensors.provider.strip():
+        raise ConfigError(f"sensors.provider must be the name of a source, got {config.sensors.provider!r}")
+
     if config.sensors.lhm_web.timeout <= 0:
         raise ConfigError(f"sensors.lhm_web.timeout must be greater than zero, got {config.sensors.lhm_web.timeout!r}")
 

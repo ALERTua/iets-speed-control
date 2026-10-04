@@ -191,9 +191,10 @@ class GUIApp:
 
     def show_settings(self, icon=None, item=None):
         """Select the Settings destination. Safe to call from the tray thread."""
-        if self.window and self.rail:
-            rail = self.rail
-            self.window.after(0, lambda: rail.select(SETTINGS))
+        if self.window:
+            if self.rail:
+                rail = self.rail
+                self.window.after(0, lambda: rail.select(SETTINGS))
             self._show_window()
 
     def show_home(self, icon=None, item=None):
@@ -202,18 +203,24 @@ class GUIApp:
             self.window.after(0, lambda: rail.select(HOME))
 
     def _switch(self, view):
-        if not self.window or not self.status_panel or not self.settings_view or view == self.view:
+        if not self.window or view == self.view:
+            return
+
+        # _create_window builds both panels together with the window, so this only guards the types.
+        status_panel, settings_view = self.status_panel, self.settings_view
+        if status_panel is None or settings_view is None:
+            logger.warning(f"Cannot switch to {view}: the panels are not built")
             return
 
         self.view = view
         if view == SETTINGS:
-            self.status_panel.pack_forget()
-            self.settings_view.pack(fill="both", expand=True)
-            self.settings_view.sync_mode()
+            status_panel.pack_forget()
+            settings_view.pack(fill="both", expand=True)
+            settings_view.sync_mode()
         else:
-            self.settings_view.pack_forget()
-            self.status_panel.pack(fill="both", expand=True)
-            self.status_panel.sync_mode()
+            settings_view.pack_forget()
+            status_panel.pack(fill="both", expand=True)
+            status_panel.sync_mode()
 
     def _on_history_window(self, seconds):
         self.history_window = seconds

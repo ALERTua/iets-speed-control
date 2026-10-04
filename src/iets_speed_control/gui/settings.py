@@ -110,12 +110,12 @@ def parse_plain(text: str) -> str:
 class SettingsRow:
     """One row inside a card: title, description and any error on the left, control on the right."""
 
-    # The row builders attach the typed control under its own name, so callers need no cast. Only the
-    # one matching the kind of row exists on a given instance.
-    entry: ctk.CTkEntry
-    menu: ctk.CTkOptionMenu
-    combo: ctk.CTkComboBox
-    switch: ctk.CTkSwitch
+    # The row builders attach the control under its own name. Only the one matching the kind of row
+    # is set; the others stay None, so reading the wrong one is a type error, not a missing attribute.
+    entry: ctk.CTkEntry | None = None
+    menu: ctk.CTkOptionMenu | None = None
+    combo: ctk.CTkComboBox | None = None
+    switch: ctk.CTkSwitch | None = None
 
     def __init__(self, card, title, subtitle, control, row_index):
         self.title = title
@@ -148,6 +148,12 @@ class SettingsRow:
 
     def matches(self, needle: str) -> bool:
         return needle in self.title.lower() or needle in self.subtitle.lower()
+
+    def require_combo(self) -> ctk.CTkComboBox:
+        """The combo box of a row built by _combo_row; any other row is a programming error."""
+        if self.combo is None:
+            raise TypeError(f"Settings row {self.title!r} has no combo box")
+        return self.combo
 
     def show_error(self, message: str):
         """Say why the value was refused, right under the description that asked for it."""
@@ -218,7 +224,7 @@ class SettingsView(ctk.CTkFrame):
         controller: SpeedController,
         on_history_window: Callable[[int], None] | None = None,
         history_window: int = HISTORY_WINDOW_SECONDS,
-        on_reconnect: Callable[[], Future | None] | None = None,
+        on_reconnect: Callable[[], Future[bool] | None] | None = None,
     ):
         super().__init__(master, fg_color=BACKGROUND)
         self.controller = controller
@@ -691,6 +697,7 @@ class SettingsView(ctk.CTkFrame):
             "sensors.provider",
             sorted(PROVIDER_NAMES),
             # The menu shows the product name; the file keeps the code name.
+            # sensors.provider is validated as text on load, so str() never has to invent a label.
             display=lambda name: PROVIDER_LABELS.get(str(name), str(name)),
             parse=lambda label: PROVIDER_NAMES.get(label, label),
             width=260,
@@ -810,7 +817,7 @@ class SettingsView(ctk.CTkFrame):
 
         readings: dict[str, float] = payload or {}
         for row, key in ((self.cpu_filter_row, "cpu"), (self.gpu_filter_row, "gpu")):
-            row.combo.configure(values=sorted(readings) or [get_value(CONFIG, f"sensors.{key}_filter")])
+            row.require_combo().configure(values=sorted(readings) or [get_value(CONFIG, f"sensors.{key}_filter")])
 
         parts = []
         missing = False
@@ -883,7 +890,7 @@ class SettingsView(ctk.CTkFrame):
             logger.debug(f"Could not list serial ports: {e}")
             return
 
-        self.port_row.combo.configure(values=ports or [CONFIG.device.port])
+        self.port_row.require_combo().configure(values=ports or [CONFIG.device.port])
 
     def refresh_connection(self):
         connected = self.controller.connected

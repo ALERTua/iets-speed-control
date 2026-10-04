@@ -47,12 +47,13 @@ class SerialDevice:
         if serial is None or not serial.is_open or serial.closed:
             return False
 
-        # An unplugged adapter still reports itself open; touching it is what reveals the loss.
+        # An unplugged adapter still reports itself open; touching it is what reveals the loss. Any
+        # error counts, not only "Access is denied": a port that cannot be read cannot drive the fan.
         try:
             _ = serial.in_waiting
         except SerialException as e:
-            if "Access is denied" in str(e):
-                return False
+            logger.debug(f"{self.port} is open but not usable: {e}")
+            return False
 
         return True
 
