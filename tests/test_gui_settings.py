@@ -711,3 +711,45 @@ def test_the_dead_sensor_filter_note_is_gone(view):
     titles = [row.title for row in view.sections["Manual"].rows]
 
     assert titles == ["Control mode", "Manual speed"]
+
+
+def test_a_good_read_clears_the_error_of_an_earlier_one(view):
+    """Switching from a silent source to a working one must not leave the old warning up."""
+    view._show_sensor_match(True, {})
+    assert view.filters_row.error.winfo_manager(), "test setup: the empty read must have warned"
+
+    view._show_sensor_match(True, FakeProvider().get_temperatures())
+
+    assert not view.filters_row.error.winfo_manager()
+
+
+def test_a_failed_read_clears_the_results_of_an_earlier_one(view):
+    view._show_sensor_match(True, FakeProvider().get_temperatures())
+
+    view._show_sensor_match(False, OSError("gone"))
+
+    assert all(line.result.cget("text") == "" for line in view.filter_list.lines)
+
+
+def test_a_read_that_finishes_after_a_newer_one_started_is_dropped(view, monkeypatch):
+    """A slow read of the old source must not paint its verdict over the new source."""
+    monkeypatch.setattr(view, "_in_background", lambda work, done: None)
+    view.refresh_sensor_match()
+    stale = view._match_request
+    view.refresh_sensor_match()
+
+    view._show_sensor_match(True, {}, stale)
+
+    assert not view.filters_row.error.winfo_manager(), "the stale empty read must not raise a warning"
+
+
+def test_switching_the_source_clears_the_old_verdict_at_once(view, monkeypatch):
+    from iets_speed_control.sensors import LibreHardwareMonitorWebProvider
+
+    monkeypatch.setattr(LibreHardwareMonitorWebProvider, "get_temperatures", lambda self: {"CPU": 50.0})
+    monkeypatch.setattr(view, "_in_background", lambda work, done: None)
+    view._show_sensor_match(True, {})
+
+    choose(row_named(view, "Sensors", "Temperature source"), "LibreHardwareMonitor (web server)")
+
+    assert not view.filters_row.error.winfo_manager()
