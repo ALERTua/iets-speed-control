@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import Callable
 from enum import Enum
 
@@ -17,6 +18,11 @@ logger = logging.getLogger(__name__)
 # Seconds to wait after the loop's own bookkeeping failed. Fixed, because the configured delay may be
 # what failed.
 RETRY_DELAY = 1.0
+
+# Seconds between two ticks that mean the machine slept: far beyond any sensible tick delay, and fixed so a
+# broken delay cannot break this check too. A serial handle can come out of hibernation looking open while
+# the driver no longer delivers anything through it.
+SLEEP_GAP = 60.0
 
 
 class Mode(Enum):
@@ -65,6 +71,9 @@ class SpeedController:
         # (re)connect and every RESYNC_EVERY ticks, to catch changes made outside this app.
         self._last_sent: int | None = None
         self._ticks_since_resync = 0
+        # Wall-clock time of the previous tick. Wall clock rather than monotonic: only the wall clock is
+        # sure to count the time the machine spent asleep.
+        self._last_tick_at: float | None = None
 
         self._temp_window = max(1, int(CONFIG.control.temp_window))
         self._smoother = MedianSmoother(self._temp_window)
@@ -414,10 +423,21 @@ class SpeedController:
         self._last_sent = None
         self._ticks_since_resync = 0
 
+    def _slept_since_last_tick(self) -> bool:
+        now = time.time()
+        previous, self._last_tick_at = self._last_tick_at, now
+        return previous is not None and now - previous > SLEEP_GAP
+
     async def _tick(self):
         """Read the temperatures once and bring the fan to the speed they call for."""
+        if self._slept_since_last_tick() and self.device.connected:
+            logger.info(f"The machine slept; reopening {self.device.describe()}")
+            await self.device.disconnect()
+
         # Attempt connection if not connected
         if not self.device.connected:
+            # Whatever was last written may never have reached a device that dropped off: read it again.
+            self._forget_device_value()
             await self._connect()
 
         if not self.device.connected:

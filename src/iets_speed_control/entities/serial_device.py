@@ -10,6 +10,11 @@ from ..util.config import CONFIG
 
 logger = logging.getLogger(__name__)
 
+# Seconds after which a read or a write is taken as one that will never finish. The port's own timeouts
+# end a normal exchange well within a second, but after a resume from sleep the USB serial driver can leave
+# a request pending forever, and the control loop would wait on it with it.
+EXCHANGE_TIMEOUT = 5.0
+
 
 def require_connection(func):
     async def wrapper(self, *args, **kwargs):
@@ -33,6 +38,8 @@ class SerialDevice:
         self.baudrate = CONFIG.device.baudrate if baudrate is None else baudrate
         self.timeout = CONFIG.device.timeout if timeout is None else timeout
         self.serial: aioserial.AioSerial | None = None
+        # Whether the last attempt to open the port failed, so an outage is logged once rather than every tick.
+        self._open_failing = False
 
     async def __aenter__(self):
         await self.connect()
@@ -58,43 +65,84 @@ class SerialDevice:
         return True
 
     async def connect(self):
-        if not self.connected:
-            try:
-                self.serial = aioserial.AioSerial(
-                    port=self.port,
-                    baudrate=self.baudrate,
-                    write_timeout=self.timeout,
-                    timeout=self.timeout,
-                )
-                logger.info(f"Connected to {self.port}")
-            except (OSError, ValueError) as e:
-                # SerialException subclasses OSError; ValueError covers bad port/baudrate settings.
+        if self.connected:
+            return True
+
+        if self.serial is not None:
+            self._drop_port("it stopped answering")
+
+        try:
+            self.serial = aioserial.AioSerial(
+                port=self.port,
+                baudrate=self.baudrate,
+                write_timeout=self.timeout,
+                timeout=self.timeout,
+            )
+        except (OSError, ValueError) as e:
+            # SerialException subclasses OSError; ValueError covers bad port/baudrate settings. The loop tries
+            # again every tick for as long as the adapter is away, so only the first failure is an error.
+            if self._open_failing:
+                logger.debug(f"Still unable to connect to {self.port}: {e}")
+            else:
                 logger.error(f"Error: Unable to connect to {self.port}. {e}")
-                return False
+                self._open_failing = True
+            return False
+
+        # Said at the level of the failure it ends, so a log that kept the error also keeps the recovery.
+        logger.log(logging.WARNING if self._open_failing else logging.INFO, f"Connected to {self.port}")
+        self._open_failing = False
         return True
 
+    def _drop_port(self, reason: str):
+        """Close a port that failed, so the next attempt opens a fresh handle instead of fighting this one.
+
+        A handle the driver gave up on, after a resume from sleep or an unplug, still holds the port: opening
+        the same port again while it is held fails with "Access is denied". Nothing else closes it, because
+        `connected` already reads it as gone.
+        """
+        serial, self.serial = self.serial, None
+        if serial is None:
+            return
+
+        logger.error(f"Lost {self.port}: {reason}. Closing it to reconnect.")
+        try:
+            serial.close()
+        except Exception as e:  # noqa: BLE001 -- a dead handle can fail to close in any way; it is dropped regardless
+            logger.debug(f"Closing the dead handle of {self.port} failed: {e!r}")
+
     async def disconnect(self):
-        if self.connected and self.serial:
-            self.serial.close()
-            logger.info(f"Disconnected from {self.port}")
+        # Forgotten as well as closed: the next connect() must open a fresh handle, not report this one as lost.
+        serial, self.serial = self.serial, None
+        if serial is None:
+            return
+
+        try:
+            serial.close()
+        except Exception as e:  # noqa: BLE001 -- a handle that died while open can fail to close; it is gone either way
+            logger.debug(f"Closing {self.port} failed: {e!r}")
+        logger.info(f"Disconnected from {self.port}")
 
     @require_connection
     async def send_command(self, command):
         if self.serial:
             try:
-                await self.serial.write_async((command + "\n").encode())
+                await asyncio.wait_for(self.serial.write_async((command + "\n").encode()), EXCHANGE_TIMEOUT)
                 await asyncio.sleep(0.1)  # Wait for the command to be processed
+            except TimeoutError:
+                self._drop_port(f"a write did not finish in {EXCHANGE_TIMEOUT:g} s")
             except OSError as e:
-                logger.error(f"Error sending command: {e}")
+                # A port that refuses one write refuses the next ones too; a fresh handle is the only cure.
+                self._drop_port(f"sending failed: {e}")
 
     @require_connection
     async def _read_line(self):
         if self.serial:
             try:
-                return (await self.serial.read_until_async()).decode()
-            # .strip()
+                return (await asyncio.wait_for(self.serial.read_until_async(), EXCHANGE_TIMEOUT)).decode()
+            except TimeoutError:
+                self._drop_port(f"a read did not finish in {EXCHANGE_TIMEOUT:g} s")
             except OSError as e:
-                logger.error(f"Error reading line: {e}")
+                self._drop_port(f"reading failed: {e}")
         return ""
 
     async def _read_results(self):
