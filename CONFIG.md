@@ -40,7 +40,7 @@ state here — until then, edits are in memory only.
 
 ## Example
 
-A complete file for a machine that reads temperatures from the LibreHardwareMonitor web server:
+A complete file for a machine that tracks two sensors of the LibreHardwareMonitor web server and one of the NVIDIA driver:
 
 ```yaml
 device:
@@ -48,10 +48,16 @@ device:
   timeout: 0.1
 
 sensors:
-  provider: lhm-web
+  tracked:
+    lhm-web:
+      - 13th Gen Intel Core i9-13900HX/Core Max
+      - 13th Gen Intel Core i9-13900HX/CPU Package
+    nvidia:
+      - GPU Hot Spot
 
 control:
   delay: 0.5
+  default_speed: 60
   max_step: 3
   # tuned by hand: near-silent up to 65 °C, full tilt past 92
   curve:
@@ -88,39 +94,39 @@ The serial device that drives the fan.
 
 ## `sensors`
 
-| Key          | Default  | Meaning                                                                                                       |
-|--------------|----------|---------------------------------------------------------------------------------------------------------------|
-| `provider`   | `aida64` | `aida64`, `lhm` (LibreHardwareMonitor via WMI), `lhm-web` (its web server) or `lenovo-wmi` (Lenovo Legion embedded controller; the app must run as administrator). See README for what each needs. |
-| `filters`    | `{}`     | The filters of each source, by its code name. A source without an entry uses `[CPU, GPU]`. |
+| Key       | Default | Meaning                                                                                                                                                                                  |
+|-----------|---------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `tracked` | `{}`    | The sensors that drive the fan, by the code name of their source. Empty: nothing is monitored, and the fan runs at `control.default_speed`. See below.                                    |
 
-### `sensors.filters`
+### `sensors.tracked`
 
-The curve is evaluated at the hottest reading that any filter of the active source matches.
+Maps the code name of a source to the exact names of the sensors tracked from it. The sources are `aida64`, `lhm` (LibreHardwareMonitor via WMI), `lhm-web` (its web server), `lenovo-wmi` (Lenovo Legion embedded controller; the app must run as administrator) and `nvidia` (the NVIDIA display driver; GPU temperatures only, no administrator rights). See README for what each needs.
 
 ```yaml
 sensors:
-  filters:
+  tracked:
+    lenovo-wmi:
+      - CPU
+      - GPU
     lhm-web:
-      - Core Max
-      - hot ?spot
-    aida64:
-      - CPU Package
-      - GPU1
+      - NVIDIA GeForce RTX 4090 Laptop GPU/GPU Hot Spot
 ```
 
-- A filter is a regular expression, searched anywhere in the sensor label and ignoring case: `hot ?spot` matches both `GPU Hot Spot` and `GPU1 Hotspot`.
-- A source needs at least one filter. An invalid expression stops the app with a message naming the filter.
-- A filter that matches nothing does not count. When no filter matches anything, the app reads 0 °C, which holds the fan at the curve's floor. Settings → Sensors marks such a filter in red.
-- Settings → Sensors offers the labels the source reports right now. A label picked there is stored escaped, so that brackets and dots in it match literally.
-- Labels differ between sources, so each source keeps its own list.
-- A filter appears once per list; a repeat is refused.
-- Every filter runs against every label on every tick. Keep expressions simple: a nested repeat such as `(a+)+` can take a very long time on some labels and stall the fan control while it runs.
+- The curve is evaluated at the hottest reading of any tracked sensor, from any source. On a tie the sensor listed first wins.
+- Every source that is listed is read on every tick, all at the same time. A source that is not listed is not read.
+- A sensor name is the exact label the source reports, not a pattern: `CPU (Tctl)` means that text. Labels differ between sources, and two sources can use the same label, so the names are kept per source. Settings → Sensors lists the labels each source reports right now.
+- A source written with nothing under it is read but drives nothing yet. Settings does this to show what the source offers.
+- An alias is accepted for the source name (`ohm` for `lhm`, `lenovo` for `lenovo-wmi`) and is stored under the code name. The same source under two spellings is refused, and so is an unknown source.
+- A sensor name must be non-empty text, and it appears once per source; a repeat is refused.
+- A reading counts only when it is a live temperature above 0 °C and up to 150 °C. Sources report 0 °C for a sensor they lack, and a limit or a margin such as `Distance to TjMax` is not a temperature.
+- When no tracked sensor has a reading, Auto mode runs the fan at `control.default_speed`. One exception: when every source that has a tracked sensor is asleep (an idle laptop's NVIDIA GPU), the curve reads 0 °C and runs on its floor, because a sleeping GPU is cold, not broken.
+- When no sensor is tracked at all, monitoring is stopped and the fan runs at `control.default_speed`.
 
-The older keys `sensors.cpu_filter` and `sensors.gpu_filter` are still read once. Their values, escaped, become the filter list of the current source, and the next save writes the new form.
+**Breaking change.** `sensors.provider`, `sensors.filters`, `sensors.cpu_filter` and `sensors.gpu_filter` no longer exist, and nothing is carried over from them. The app ignores them with the log line `Ignoring unknown configuration key`, and the next save drops them from the file. Pick the sensors again in Settings → Sensors, or write `sensors.tracked` yourself.
 
 ### `sensors.lhm_web`
 
-Used only when `provider: lhm-web`.
+Used only when `lhm-web` is tracked.
 
 | Key        | Default                           | Meaning                                                                                                                                                                                             |
 |------------|-----------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -140,6 +146,7 @@ Used only when `provider: lhm-web`.
 | `ignore_less_than` | `0`       | Ignore computed changes smaller than this many percent.                                                                                                                                                                                                                  |
 | `mode`             | `auto`    | `auto` follows the curve, `manual` holds a fixed speed. Remembered between runs. Set from Settings → Manual or from Home.                                                                                                                                                 |
 | `manual_speed`     | `0`       | Fan percentage used in Manual mode, 0–100. Remembered between runs, so selecting Manual resumes the speed you last chose rather than whatever the curve is asking for. Set from Settings → Manual.                                                                        |
+| `default_speed`    | `50`      | Fan percentage, a whole number 0–100, for when the curve has nothing to go on: no sensor is tracked, no tracked sensor has a reading, the control loop is stopped, and the app exits. Half speed, so a fault never leaves the laptop uncooled. Manual mode ignores it while the loop runs. |
 | `curve`            | see below | Temperature → fan percent.                                                                                                                                                                                                                                               |
 
 ### `control.curve`
@@ -159,7 +166,7 @@ control:
 - Temperatures must strictly increase. Percentages must be within 0–100.
 - Between two points the percentage is interpolated linearly.
 - Below the first point and above the last, the nearest percentage is held flat.
-- The curve is evaluated at the hottest reading the filters match (see `sensors.filters`).
+- The curve is evaluated at the hottest reading of the tracked sensors (see `sensors.tracked`).
 - Percentages that decrease are accepted but logged as a warning: the editor never produces that, so it usually means a
   hand-edit went wrong.
 

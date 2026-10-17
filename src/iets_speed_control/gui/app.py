@@ -132,7 +132,15 @@ class GUIApp:
 
     def _update_tray_tooltip(self):
         if self.tray_icon:
-            self.tray_icon.title = f"Max: {self.controller.max_temp}°C | Fan: {self.controller.current_speed}%"
+            self.tray_icon.title = f"Max: {self._max_text()} | Fan: {self.controller.current_speed}%"
+
+    def _max_text(self) -> str:
+        # Without a reading the controller keeps its last maximum, which no longer describes anything.
+        if not self.controller.monitoring:
+            return "not monitoring"
+        if self.controller.fallback:
+            return "no reading"
+        return f"{self.controller.max_temp}°C"
 
     # --- windows --------------------------------------------------------------------------
 

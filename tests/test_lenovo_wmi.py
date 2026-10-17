@@ -19,6 +19,7 @@ from iets_speed_control.sensors import (
     lenovo_wmi,
 )
 from iets_speed_control.sensors import base as sensors_base
+from iets_speed_control.sensors.base import is_plausible
 
 READINGS = {0x05040000: 83, 0x05050000: 72, 0x05010000: 74}
 
@@ -73,13 +74,12 @@ def test_reads_cpu_gpu_and_chipset(elevated, fake_wmi):
     assert LenovoWmiProvider().get_temperatures() == {"CPU": 83.0, "GPU": 72.0, "PCH": 74.0}
 
 
-def test_the_default_filters_find_one_cpu_and_one_gpu(elevated, fake_wmi):
-    """The labels are bare, so the default filters "CPU" and "GPU" work without any tuning."""
-    from iets_speed_control.util.filters import DEFAULT_FILTERS, select
+def test_every_label_it_reports_can_be_tracked(elevated, fake_wmi):
+    """A label the plausibility check refused could be offered in Settings but never drive the fan."""
+    readings = LenovoWmiProvider().get_temperatures()
 
-    selection = select(LenovoWmiProvider().get_temperatures(), DEFAULT_FILTERS)
-
-    assert [(match.pattern, match.label) for match in selection.matches] == [("CPU", "CPU"), ("GPU", "GPU")]
+    assert readings
+    assert all(is_plausible(label, value) for label, value in readings.items())
 
 
 def test_without_admin_rights_it_says_so_and_does_not_query(not_elevated, fake_wmi, caplog):

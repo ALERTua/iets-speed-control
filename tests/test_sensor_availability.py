@@ -8,9 +8,9 @@ icon stayed green. This is the seam that turns that into a red icon and a line o
 import asyncio
 
 import pytest
+from conftest import controller_tracking
 from test_control_smoothing import FakeDevice, ScriptedSensors
 
-from iets_speed_control.controller import SpeedController
 from iets_speed_control.util.config import CONFIG
 
 ctk = pytest.importorskip("customtkinter")
@@ -54,21 +54,21 @@ async def run_briefly(controller, seconds=0.08):
 
 def test_a_fresh_controller_assumes_the_source_works():
     """Nothing has been read yet, so there is nothing to complain about."""
-    assert SpeedController(sensor_provider=SilentSensors()).sensors_ok
+    assert controller_tracking(SilentSensors(), "lhm-web").sensors_ok
 
 
 async def test_a_source_that_answers_with_nothing_is_marked_unavailable(fast_loop):
-    controller = SpeedController(sensor_provider=SilentSensors())
+    controller = controller_tracking(SilentSensors(), "lhm-web")
     controller.device = FakeDevice(0)
 
     await run_briefly(controller)
 
-    assert controller.sensors.calls, "test setup: the loop must have read at least once"
+    assert controller.sources["lhm-web"].calls, "test setup: the loop must have read at least once"
     assert not controller.sensors_ok
 
 
 async def test_a_source_that_raises_is_marked_unavailable(fast_loop):
-    controller = SpeedController(sensor_provider=BrokenSensors())
+    controller = controller_tracking(BrokenSensors())
     controller.device = FakeDevice(0)
 
     await run_briefly(controller)
@@ -77,7 +77,7 @@ async def test_a_source_that_raises_is_marked_unavailable(fast_loop):
 
 
 async def test_a_working_source_stays_available(fast_loop):
-    controller = SpeedController(sensor_provider=ScriptedSensors([60]))
+    controller = controller_tracking(ScriptedSensors([60]))
     controller.device = FakeDevice(0)
 
     await run_briefly(controller)
@@ -87,7 +87,7 @@ async def test_a_working_source_stays_available(fast_loop):
 
 async def test_the_status_callback_fires_on_the_transition(fast_loop):
     seen = []
-    controller = SpeedController(sensor_provider=SilentSensors())
+    controller = controller_tracking(SilentSensors(), "lhm-web")
     controller.device = FakeDevice(0)
     controller.set_callbacks(on_status_change=lambda *args: seen.append(args))
 
@@ -100,41 +100,31 @@ async def test_only_the_transition_is_announced(fast_loop, caplog):
     """The loop ticks many times a second; one report per outage, not per tick."""
     import logging
 
-    controller = SpeedController(sensor_provider=SilentSensors())
+    controller = controller_tracking(SilentSensors(), "lhm-web")
     controller.device = FakeDevice(0)
 
     with caplog.at_level(logging.ERROR):
         await run_briefly(controller, seconds=0.15)
 
     complaints = [r for r in caplog.records if "No temperatures from" in r.message]
-    assert controller.sensors.calls > 3, "test setup: the loop must have ticked several times"
+    assert controller.sources["lhm-web"].calls > 3, "test setup: the loop must have ticked several times"
     assert len(complaints) == 1, f"one outage, {len(complaints)} log lines"
 
 
 async def test_recovery_is_announced_too(fast_loop):
     seen = []
-    controller = SpeedController(sensor_provider=SilentSensors())
+    controller = controller_tracking(SilentSensors(), "lhm-web")
     controller.device = FakeDevice(0)
     controller.set_callbacks(on_status_change=lambda *args: seen.append(args))
 
     await controller.start()
     await asyncio.sleep(0.05)
-    controller._sensors = ScriptedSensors([60])  # as if the web server came back
+    controller._sources["lhm-web"] = ScriptedSensors([60])  # as if the web server came back
     await asyncio.sleep(0.05)
     await controller.stop()
 
     flags = [args[2] for args in seen]
     assert False in flags and flags[-1] is True, f"expected a drop and a recovery: {flags}"
-
-
-def test_switching_source_clears_the_previous_verdict():
-    """A new source has not failed yet; inheriting the old red would be a lie."""
-    controller = SpeedController(sensor_provider=SilentSensors())
-    controller._sensors_ok = False
-
-    controller.sensors = ScriptedSensors([60])
-
-    assert controller.sensors_ok
 
 
 # --- the tray icon and the status line ---------------------------------------------------------
@@ -150,10 +140,14 @@ class FakeShell:
 
 @pytest.fixture
 def panel(tk_root):
+    """Home with the lhm-web source tracked, as its last read left it: answering with nothing."""
     from iets_speed_control.gui.status import StatusPanel
+    from iets_speed_control.util.tracking import SourceState
 
     shell = FakeShell()
-    widget = StatusPanel(tk_root, SpeedController(sensor_provider=SilentSensors()), shell)
+    controller = controller_tracking(SilentSensors(), "lhm-web", ["CPU/Core Max"])
+    controller._source_states = {"lhm-web": SourceState.SILENT}
+    widget = StatusPanel(tk_root, controller, shell)
     widget.stop_polling()
     widget.shell = shell
     try:
@@ -178,28 +172,66 @@ def test_the_tray_is_green_only_when_both_halves_work(panel):
 def test_the_status_line_names_the_silent_source(panel):
     panel._apply_status(connected=True, running=True, sensors_ok=False)
 
-    assert "lhm-web" in panel.status_label.cget("text")
+    assert "No temperatures from LibreHardwareMonitor (web server)" in panel.status_label.cget("text")
 
 
-def test_the_status_line_says_to_restart_as_administrator(panel, monkeypatch):
-    from iets_speed_control.sensors import LenovoWmiProvider, base
+def test_the_status_line_says_to_restart_as_administrator(panel):
+    from iets_speed_control.util.tracking import SourceState
 
-    monkeypatch.setattr(base, "is_elevated", lambda: False)
-    panel.controller._sensors = LenovoWmiProvider()
+    panel.controller._source_states = {"lenovo-wmi": SourceState.NEEDS_ADMIN}
 
     panel._apply_status(connected=True, running=True, sensors_ok=False)
 
     assert "restart as administrator" in panel.status_label.cget("text")
 
 
-def test_a_source_that_needs_no_admin_rights_gets_no_such_advice(panel, monkeypatch):
-    from iets_speed_control.sensors import base
-
-    monkeypatch.setattr(base, "is_elevated", lambda: False)
-
+def test_a_source_that_needs_no_admin_rights_gets_no_such_advice(panel):
     panel._apply_status(connected=True, running=True, sensors_ok=False)
 
     assert "administrator" not in panel.status_label.cget("text")
+
+
+def test_every_silent_source_is_named(panel):
+    from iets_speed_control.util.tracking import SourceState
+
+    panel.controller._source_states = {
+        "aida64": SourceState.SILENT,
+        "lhm-web": SourceState.OK,
+        "lenovo-wmi": SourceState.NEEDS_ADMIN,
+    }
+
+    panel._apply_status(connected=True, running=True, sensors_ok=False)
+
+    text = panel.status_label.cget("text")
+    assert "No temperatures from AIDA64" in text
+    assert "Lenovo Legion (WMI): restart as administrator" in text
+    assert "LibreHardwareMonitor" not in text, "a source that answered is not part of the problem"
+
+
+def test_nothing_tracked_keeps_the_tray_green(panel, monkeypatch):
+    """Tracking nothing is a choice the user made, so it is no fault to raise."""
+    monkeypatch.setattr(CONFIG.sensors, "tracked", {})
+    panel.controller.sync_sources()
+
+    panel._apply_status(connected=True, running=True, sensors_ok=panel.controller.sensors_ok)
+
+    assert panel.shell.healthy == [True]
+    assert "No temperatures" not in panel.status_label.cget("text")
+
+
+def test_removing_the_silent_source_clears_its_error_on_home(panel, monkeypatch):
+    """Adding LibreHardwareMonitor and removing it again left its error on Home until a restart."""
+    panel.controller._connected = True
+    panel.controller._update_silence()
+    panel._drain()
+    assert "No temperatures from" in panel.status_label.cget("text"), "test setup: the error must show"
+
+    monkeypatch.setattr(CONFIG.sensors, "tracked", {})
+    panel.controller.sync_sources()
+    panel._drain()
+
+    assert "No temperatures" not in panel.status_label.cget("text")
+    assert panel.shell.healthy[-1] is True
 
 
 def test_a_missing_device_still_reads_as_disconnected(panel):

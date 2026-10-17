@@ -6,12 +6,14 @@ from .base import SensorProvider, lacks_admin_rights
 from .lenovo_wmi import LenovoWmiProvider
 from .lhm import LibreHardwareMonitorProvider
 from .lhm_web import LibreHardwareMonitorWebProvider
+from .nvidia import NvidiaProvider
 
 PROVIDERS = {
     Aida64Provider.name: Aida64Provider,
     LibreHardwareMonitorProvider.name: LibreHardwareMonitorProvider,
     LibreHardwareMonitorWebProvider.name: LibreHardwareMonitorWebProvider,
     LenovoWmiProvider.name: LenovoWmiProvider,
+    NvidiaProvider.name: NvidiaProvider,
 }
 
 # Full names for the settings panel. The configuration file keeps the code names: they are short,
@@ -43,6 +45,7 @@ __all__ = [
     "LenovoWmiProvider",
     "LibreHardwareMonitorProvider",
     "LibreHardwareMonitorWebProvider",
+    "NvidiaProvider",
     "SensorProvider",
     "create_provider",
     "find_provider",

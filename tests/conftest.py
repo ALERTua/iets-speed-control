@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -96,7 +97,7 @@ def tk_root():
 
 
 class FakeProvider:
-    """A sensor source with known labels, so filter feedback has something predictable to find."""
+    """A sensor source with known labels, so a test has something predictable to read."""
 
     name = "fake"
 
@@ -105,6 +106,18 @@ class FakeProvider:
 
     def get_temperatures(self):
         return dict(self.readings)
+
+
+def controller_tracking(provider, source: str = "aida64", labels=("CPU Package",)):
+    """A SpeedController that reads `provider` as the source `source` and tracks `labels` of it.
+
+    The controller reads exactly the sources of sensors.tracked, so a test has to track something for a
+    scripted provider to be read at all. clean_config puts the tracked set back after the test.
+    """
+    from iets_speed_control.controller import SpeedController
+
+    CONFIG.sensors.tracked = {source: list(labels)}
+    return SpeedController(sources={source: provider})
 
 
 @pytest.fixture(scope="module")
@@ -118,7 +131,8 @@ def settings_view(tk_root):
     from iets_speed_control.controller import SpeedController
     from iets_speed_control.gui.settings import SettingsView
 
-    controller = SpeedController(sensor_provider=FakeProvider())
+    # A stand-in for every source, so no test that tracks one through this panel reaches WMI, NVAPI or HTTP.
+    controller = SpeedController(sources={name: FakeProvider() for name in PROVIDERS})
     widget = SettingsView(tk_root, controller)
     widget.pack(fill="both", expand=True)
     tk_root.update()
@@ -143,7 +157,7 @@ def reset_settings_view(view):
     controller.mode = Mode.AUTO
     controller.manual_speed = CONFIG.control.manual_speed
     controller._current_speed = 0
-    controller.sensors = FakeProvider()
+    controller.sync_sources()  # clean_config has put the tracked set back
     controller.temp_window = CONFIG.control.temp_window
     controller.curve = CONFIG.control.curve
 
@@ -159,7 +173,6 @@ def reset_settings_view(view):
     view._initial_curve = controller.curve
     view._apply_lhm_visibility()
     view._apply_admin_note()
-    view._show_filter_error(None)
     view.connection_label.configure(text="")
     view.history_window = HISTORY_WINDOW_SECONDS
     view.sync_mode()
@@ -271,19 +284,45 @@ def probe_lenovo_wmi() -> dict[str, float]:
     return found
 
 
+def probe_nvidia() -> dict[str, float]:
+    """The core temperature from nvidia-smi, which asks the driver through NVML, not NVAPI.
+
+    It has no hot spot or memory junction, so only "GPU Core" can be compared.
+    """
+    try:
+        answer = subprocess.run(
+            ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        ).stdout
+        return {"GPU Core": float(answer.splitlines()[0])}
+    except Exception as e:  # noqa: BLE001 -- a missing nvidia-smi, a failed run and odd output all mean "unavailable"
+        logger.debug(f"nvidia-smi probe failed: {e}")
+        return {}
+
+
 PROBES = {
     "aida64": probe_aida64,
     "lhm": probe_lhm,
     "lhm-web": probe_lhm_web,
     "lenovo-wmi": probe_lenovo_wmi,
+    "nvidia": probe_nvidia,
 }
 
 SOURCE_HINTS = {
     "aida64": "AIDA64 must be running with 'write sensors to WMI' and temperature sensors enabled",
     "lhm": "LibreHardwareMonitor must be running as administrator so it registers its WMI provider",
     "lenovo-wmi": "needs a Lenovo Legion laptop and a test run as administrator",
+    "nvidia": "needs an NVIDIA GPU with its driver installed, and nvidia-smi on the PATH",
     "lhm-web": "LibreHardwareMonitor must serve sensors.lhm_web.url (Options -> Remote Web Server -> Run)",
 }
+
+
+# Labels a source reports that its probe cannot see, so the cross-check must not call them invented.
+# nvidia-smi has no hot spot or memory junction, only the core.
+UNPROBED_LABELS = {"nvidia": {"GPU Hot Spot", "GPU Memory Junction"}}
 
 
 def use_this_machines_web_server():
@@ -322,6 +361,18 @@ def provider_name(request) -> str:
 def probe(provider_name):
     """Callable that reads temperatures straight from the source, bypassing the provider."""
     return PROBES[provider_name]
+
+
+@pytest.fixture
+def nvidia_smi():
+    """The nvidia-smi probe, for the tests that are about the NVIDIA source alone."""
+    return probe_nvidia
+
+
+@pytest.fixture
+def unprobed_labels(provider_name) -> set[str]:
+    """Labels this source reports that its probe cannot see."""
+    return UNPROBED_LABELS.get(provider_name, set())
 
 
 @pytest.fixture

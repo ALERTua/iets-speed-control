@@ -14,7 +14,7 @@ repos:
       - id: trailing-whitespace
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.16.5
+    rev: v0.17.1
     hooks:
       # Run the linter.
       - id: ruff
@@ -24,7 +24,7 @@ repos:
 
   # Checks every file of [tool.ty.src] in pyproject.toml, not only the changed files
   - repo: https://github.com/astral-sh/ty-pre-commit
-    rev: v0.0.84
+    rev: v0.0.89
     hooks:
       - id: ty
         args: [--locked]
@@ -43,6 +43,6 @@ repos:
         pass_filenames: false
 
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.12.7
+    rev: 0.13.1
     hooks:
       - id: uv-lock

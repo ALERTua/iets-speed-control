@@ -12,7 +12,6 @@ The schema is documented in CONFIG.md.
 
 import logging
 import os
-import re
 from dataclasses import dataclass, field, fields, is_dataclass, replace
 from io import StringIO
 from pathlib import Path
@@ -20,8 +19,7 @@ from pathlib import Path
 from ruamel.yaml import YAML, YAMLError
 from ruamel.yaml.comments import CommentedSeq
 
-from .filters import DEFAULT_FILTERS, compile_filter
-from .source_names import canonical_source
+from .source_names import SOURCE_NAMES, canonical_source
 
 logger = logging.getLogger(__name__)
 
@@ -69,10 +67,10 @@ class LhmWebConfig:
 
 @dataclass
 class SensorsConfig:
-    provider: str = "aida64"
-    # The filters of each source, by its code name. A source without an entry uses DEFAULT_FILTERS, so
-    # the file only lists the sources whose filters were changed.
-    filters: dict[str, list[str]] = field(default_factory=dict)
+    # The sensors that drive the fan, by the code name of their source. A source with an empty list is
+    # read but drives nothing yet, so Settings can show what it offers. Empty as a whole: nothing is
+    # monitored, and the fan runs at control.default_speed.
+    tracked: dict[str, list[str]] = field(default_factory=dict)
     lhm_web: LhmWebConfig = field(default_factory=LhmWebConfig)
 
 
@@ -85,6 +83,9 @@ class ControlConfig:
     ignore_less_than: int = 0
     mode: str = "auto"  # remembered between runs, along with the speed Manual mode uses
     manual_speed: int = 0
+    # The speed for when the curve has nothing to go on: no sensor tracked, none of them answering, the
+    # loop stopped, and the app's own exit. Half speed, so a fault never leaves the laptop uncooled.
+    default_speed: int = 50
     curve: list = field(default_factory=lambda: [list(point) for point in DEFAULT_CURVE])
 
 
@@ -154,49 +155,8 @@ def load(path: Path | None = None) -> Config:
     if not isinstance(raw, dict):
         raise ConfigError(f"{target} must contain a mapping of sections, got {type(raw).__name__}")
 
-    legacy = _pop_legacy_filters(raw)
     _apply(config, raw, "")
-    if legacy:
-        _migrate_legacy_filters(config, legacy)
     return validate(config)
-
-
-# Until the filter list, a file named one CPU and one GPU filter, matched as plain text, with these
-# defaults for a key it left out.
-LEGACY_FILTER_KEYS = {"cpu_filter": "CPU", "gpu_filter": "GPU"}
-
-
-def _pop_legacy_filters(raw: dict) -> list[str]:
-    sensors = raw.get("sensors")
-    if not isinstance(sensors, dict) or not any(key in sensors for key in LEGACY_FILTER_KEYS):
-        return []
-
-    return [str(sensors.pop(key, default)) for key, default in LEGACY_FILTER_KEYS.items()]
-
-
-def _migrate_legacy_filters(config: Config, legacy: list[str]):
-    """Carry sensors.cpu_filter and sensors.gpu_filter over as the current source's filters.
-
-    They were plain text, so they are escaped: "CPU (Tctl)" keeps matching that text rather than turning
-    into a regex group. Defaults are not carried over; the source's default list already holds them.
-    """
-    if legacy == list(DEFAULT_FILTERS):
-        return
-
-    # Keyed by the code name, as every reader looks it up: "ohm" in the file means lhm.
-    provider = canonical_source(config.sensors.provider)
-    if provider in config.sensors.filters:
-        logger.warning(f"Ignoring {', '.join(LEGACY_FILTER_KEYS)}: sensors.filters.{provider} is already set")
-        return
-
-    patterns = list(dict.fromkeys(re.escape(text) for text in legacy))
-    config.sensors.filters[provider] = patterns
-    logger.info(f"Moved {', '.join(LEGACY_FILTER_KEYS)} into sensors.filters.{provider}: {patterns}")
-
-
-def filters_for(config: Config, provider: str) -> list[str]:
-    """The filters of one source, falling back to the defaults when its list was never changed."""
-    return list(config.sensors.filters.get(provider, DEFAULT_FILTERS))
 
 
 # --- validation -------------------------------------------------------------------------------
@@ -232,15 +192,16 @@ def validate(config: Config) -> Config:
         raise ConfigError(f"control.mode must be one of {', '.join(CONTROL_MODES)}, got {config.control.mode!r}")
     config.control.mode = str(config.control.mode).strip().lower()
 
-    if not 0 <= config.control.manual_speed <= 100:
-        raise ConfigError(f"control.manual_speed must be within 0-100, got {config.control.manual_speed!r}")
+    for key, value in (
+        ("control.manual_speed", config.control.manual_speed),
+        ("control.default_speed", config.control.default_speed),
+    ):
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
+            raise ConfigError(f"{key} must be a whole number within 0-100, got {value!r}")
 
     config.control.curve = _validated_curve(config.control.curve)
 
-    if not isinstance(config.sensors.provider, str) or not config.sensors.provider.strip():
-        raise ConfigError(f"sensors.provider must be the name of a source, got {config.sensors.provider!r}")
-
-    config.sensors.filters = _validated_filters(config.sensors.filters)
+    config.sensors.tracked = _validated_tracked(config.sensors.tracked)
 
     if config.sensors.lhm_web.timeout <= 0:
         raise ConfigError(f"sensors.lhm_web.timeout must be greater than zero, got {config.sensors.lhm_web.timeout!r}")
@@ -257,27 +218,35 @@ def validate(config: Config) -> Config:
     return config
 
 
-def _validated_filters(filters) -> dict:
-    if not isinstance(filters, dict):
-        raise ConfigError(f"sensors.filters must map a source to its list of filters, got {filters!r}")
+def _validated_tracked(tracked) -> dict:
+    if tracked is None:
+        return {}
+    if not isinstance(tracked, dict):
+        raise ConfigError(f"sensors.tracked must map a source to the sensors tracked from it, got {tracked!r}")
 
-    result = {}
-    for source, patterns in filters.items():
-        key = f"sensors.filters.{source}"
-        if not isinstance(patterns, list) or not patterns:
-            # An empty list would read 0 °C and hold the fan at the curve's floor.
-            raise ConfigError(f"{key} needs at least one filter, got {patterns!r}")
+    result: dict[str, list[str]] = {}
+    for source, labels in tracked.items():
+        key = f"sensors.tracked.{source}"
+        # Keyed by the code name, as every reader looks it up: "ohm" in the file means lhm.
+        name = canonical_source(str(source))
+        if name not in SOURCE_NAMES:
+            raise ConfigError(f"{key}: no such source; the sources are {', '.join(SOURCE_NAMES)}")
+        if name in result:
+            raise ConfigError(f"{key}: {name} is already listed under another spelling")
 
-        for index, pattern in enumerate(patterns):
-            try:
-                compile_filter(pattern)
-            except ValueError as e:
-                raise ConfigError(f"{key}[{index}]: {e}") from None
-            if patterns.index(pattern) != index:
-                # A repeat selects nothing new, and two equal lines could not say which one holds the maximum.
-                raise ConfigError(f"{key}[{index}]: {pattern!r} is already in the list")
+        # A source written with nothing under it is one added with nothing picked yet.
+        labels = [] if labels is None else labels
+        if not isinstance(labels, list):
+            raise ConfigError(f"{key} must be a list of sensor names, got {labels!r}")
 
-        result[str(source)] = [str(pattern) for pattern in patterns]
+        for index, label in enumerate(labels):
+            if not isinstance(label, str) or not label.strip():
+                raise ConfigError(f"{key}[{index}] must be a sensor name, got {label!r}")
+            if labels.index(label) != index:
+                # A repeat tracks nothing new, and two equal lines could not say which one holds the maximum.
+                raise ConfigError(f"{key}[{index}]: {label!r} is already in the list")
+
+        result[name] = list(labels)
 
     return result
 
@@ -414,7 +383,7 @@ def copy(config: Config) -> Config:
         device=replace(config.device),
         sensors=replace(
             config.sensors,
-            filters={source: list(patterns) for source, patterns in config.sensors.filters.items()},
+            tracked={source: list(labels) for source, labels in config.sensors.tracked.items()},
             lhm_web=replace(config.sensors.lhm_web),
         ),
         control=replace(config.control, curve=[list(point) for point in config.control.curve]),
