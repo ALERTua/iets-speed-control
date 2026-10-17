@@ -10,8 +10,9 @@ import threading
 
 import pytest
 
-from iets_speed_control.util.filters import Selection
+from iets_speed_control.util.config import CONFIG
 from iets_speed_control.util.tools import calculate_dimmer_value, curve_to_ranges
+from iets_speed_control.util.tracking import Selection
 
 
 class FakeClock:
@@ -28,6 +29,22 @@ class FakeClock:
 @pytest.fixture
 def clock():
     return FakeClock()
+
+
+class FakeSource:
+    name = "aida64"
+
+    def get_temperatures(self):
+        return {"CPU Package": 60.0}
+
+
+@pytest.fixture
+def tracking_controller(monkeypatch):
+    """A controller with a sensor tracked: with none, Home says monitoring stopped and records nothing."""
+    from iets_speed_control.controller import SpeedController
+
+    monkeypatch.setattr(CONFIG.sensors, "tracked", {"aida64": ["CPU Package"]})
+    return SpeedController(sources={"aida64": FakeSource()})
 
 
 @pytest.fixture
@@ -177,11 +194,10 @@ def test_controller_callbacks_never_touch_widgets(tk_root):
     panel.destroy()
 
 
-def test_drain_applies_queued_updates(tk_root):
-    from iets_speed_control.controller import SpeedController
+def test_drain_applies_queued_updates(tk_root, tracking_controller):
     from iets_speed_control.gui.status import StatusPanel
 
-    panel = StatusPanel(tk_root, SpeedController())
+    panel = StatusPanel(tk_root, tracking_controller)
     panel.stop_polling()
 
     panel._post("temps", (71, Selection()))
@@ -195,12 +211,11 @@ def test_drain_applies_queued_updates(tk_root):
     panel.destroy()
 
 
-def test_drain_keeps_every_reading_for_the_graph(tk_root):
+def test_drain_keeps_every_reading_for_the_graph(tk_root, tracking_controller):
     """Labels only need the newest value, but the graph must not lose samples to coalescing."""
-    from iets_speed_control.controller import SpeedController
     from iets_speed_control.gui.status import StatusPanel
 
-    panel = StatusPanel(tk_root, SpeedController())
+    panel = StatusPanel(tk_root, tracking_controller)
     panel.stop_polling()
 
     for value in (60, 62, 64, 66):
@@ -212,12 +227,11 @@ def test_drain_keeps_every_reading_for_the_graph(tk_root):
     panel.destroy()
 
 
-def test_a_drain_redraws_the_graph_once_for_the_whole_batch(tk_root):
+def test_a_drain_redraws_the_graph_once_for_the_whole_batch(tk_root, tracking_controller):
     """Redrawing per reading rebuilt the whole canvas a dozen times to show the last of them."""
-    from iets_speed_control.controller import SpeedController
     from iets_speed_control.gui.status import StatusPanel
 
-    panel = StatusPanel(tk_root, SpeedController())
+    panel = StatusPanel(tk_root, tracking_controller)
     panel.stop_polling()
     redraws = []
     panel.history.redraw = lambda: redraws.append(1)
@@ -243,6 +257,22 @@ def test_a_drain_with_nothing_new_does_not_redraw(tk_root):
     panel._drain()
 
     assert redraws == [], "an idle poll ten times a second must not repaint the graph"
+    panel.destroy()
+
+
+def test_nothing_tracked_records_no_samples(tk_root):
+    """Without a tracked sensor the controller keeps its last maximum, which must not become a flat line."""
+    from iets_speed_control.controller import SpeedController
+    from iets_speed_control.gui.status import StatusPanel
+
+    panel = StatusPanel(tk_root, SpeedController())
+    panel.stop_polling()
+
+    panel._post("temps", (71, Selection()))
+    panel._drain()
+
+    assert len(panel.history.samples) == 0
+    assert panel.value_labels["Max"].cget("text") == "--"
     panel.destroy()
 
 

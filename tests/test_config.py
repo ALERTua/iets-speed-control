@@ -83,7 +83,7 @@ def test_absent_keys_keep_their_defaults(path):
 
     assert loaded.control.delay == 0.25
     assert loaded.control.temp_window == cfg.Config().control.temp_window
-    assert loaded.sensors.provider == cfg.Config().sensors.provider
+    assert loaded.sensors.tracked == {}
 
 
 def test_nested_sections_are_merged_not_replaced(path):
@@ -137,9 +137,6 @@ def test_a_digits_only_serial_stays_a_string(path):
         ("control:\n  max_step: -1\n", "control.max_step"),
         ("device:\n  baudrate: 0\n", "device.baudrate"),
         ("ui:\n  history_window: 0\n", "ui.history_window"),
-        ("sensors:\n  provider: null\n", "sensors.provider"),
-        ("sensors:\n  provider: 42\n", "sensors.provider"),
-        ("sensors:\n  provider: ' '\n", "sensors.provider"),
         ("control:\n  curve: [[50, 40]]\n", "at least two"),
         ("control:\n  curve: [[50, 40], [40, 60]]\n", "strictly increase"),
         ("control:\n  curve: [[50, 40], [50, 60]]\n", "strictly increase"),
@@ -185,7 +182,7 @@ def test_defaults_write_an_empty_document(path):
 def test_only_changed_values_are_written(path):
     config = cfg.Config()
     config.control.delay = 0.5
-    config.sensors.provider = "lhm-web"
+    config.sensors.tracked = {"lhm-web": ["Core Max"]}
 
     cfg.save(config, path)
     text = path.read_text(encoding="utf-8")
@@ -367,122 +364,173 @@ def test_integral_curve_values_are_written_without_a_decimal_point(path):
     assert "- [80, 90.5]" in text, "genuine fractions must survive"
 
 
-# --- the filter list ------------------------------------------------------------------------------
+# --- the tracked sensors --------------------------------------------------------------------------
 
 
-def test_a_source_without_its_own_filters_uses_the_defaults():
-    assert cfg.filters_for(cfg.Config(), "aida64") == ["CPU", "GPU"]
+def test_nothing_is_tracked_by_default(path):
+    assert cfg.Config().sensors.tracked == {}
+    assert cfg.load(path).sensors.tracked == {}
 
 
-def test_a_source_keeps_its_own_filters(path):
-    path.write_text("sensors:\n  filters:\n    lhm-web:\n      - Core Max\n      - GPU Hot Spot\n", encoding="utf-8")
+def test_a_tracked_map_is_read(path):
+    path.write_text(
+        "sensors:\n  tracked:\n    lhm-web:\n      - Core Max\n      - GPU Hot Spot\n    lenovo-wmi:\n      - PCH\n",
+        encoding="utf-8",
+    )
 
-    config = cfg.load(path)
+    assert cfg.load(path).sensors.tracked == {"lhm-web": ["Core Max", "GPU Hot Spot"], "lenovo-wmi": ["PCH"]}
 
-    assert cfg.filters_for(config, "lhm-web") == ["Core Max", "GPU Hot Spot"]
-    assert cfg.filters_for(config, "aida64") == ["CPU", "GPU"], "other sources keep the defaults"
+
+def test_a_source_is_tracked_under_its_code_name_even_when_the_file_uses_an_alias(path):
+    """Every reader looks a source up by its code name; under the alias its sensors would be lost."""
+    path.write_text("sensors:\n  tracked:\n    ohm: [CPU Package]\n", encoding="utf-8")
+
+    assert cfg.load(path).sensors.tracked == {"lhm": ["CPU Package"]}
+
+
+def test_an_unknown_source_is_refused_with_the_known_ones(path):
+    path.write_text("sensors:\n  tracked:\n    sensorama: [CPU]\n", encoding="utf-8")
+
+    with pytest.raises(cfg.ConfigError, match=r"sensors\.tracked\.sensorama: no such source.*aida64"):
+        cfg.load(path)
+
+
+def test_the_same_source_under_two_spellings_is_refused(path):
+    path.write_text("sensors:\n  tracked:\n    ohm: [CPU]\n    lhm: [GPU]\n", encoding="utf-8")
+
+    with pytest.raises(cfg.ConfigError, match="already listed under another spelling"):
+        cfg.load(path)
+
+
+@pytest.mark.parametrize("document", ["sensors:\n  tracked:\n    aida64:\n", "sensors:\n  tracked:\n    aida64: ~\n"])
+def test_a_source_with_nothing_under_it_tracks_no_sensor(path, document):
+    """The picker adds a source before the user picks from it; the file has to read back the same way."""
+    path.write_text(document, encoding="utf-8")
+
+    assert cfg.load(path).sensors.tracked == {"aida64": []}
+
+
+def test_an_empty_tracked_key_means_nothing_is_tracked(path):
+    path.write_text("sensors:\n  tracked:\n", encoding="utf-8")
+
+    assert cfg.load(path).sensors.tracked == {}
 
 
 @pytest.mark.parametrize(
     ("document", "message"),
     [
-        ("sensors:\n  filters: [CPU]\n", "must map a source"),
-        ("sensors:\n  filters:\n    aida64: []\n", "at least one filter"),
-        ("sensors:\n  filters:\n    aida64: CPU\n", "at least one filter"),
-        ("sensors:\n  filters:\n    aida64: ['CPU (']\n", r"aida64\[0\].*not a valid regular expression"),
-        ("sensors:\n  filters:\n    aida64: ['']\n", "non-empty text"),
+        ("sensors:\n  tracked: [CPU]\n", "must map a source"),
+        ("sensors:\n  tracked:\n    aida64: CPU\n", r"sensors\.tracked\.aida64 must be a list"),
+        ("sensors:\n  tracked:\n    aida64: ['']\n", r"aida64\[0\] must be a sensor name"),
+        ("sensors:\n  tracked:\n    aida64: ['   ']\n", r"aida64\[0\] must be a sensor name"),
+        ("sensors:\n  tracked:\n    aida64: [42]\n", r"aida64\[0\] must be a sensor name"),
+        ("sensors:\n  tracked:\n    aida64: [CPU, ~]\n", r"aida64\[1\] must be a sensor name"),
+        ("sensors:\n  tracked:\n    aida64: [CPU, GPU, CPU]\n", r"aida64\[2\].*already in the list"),
     ],
 )
-def test_unusable_filters_are_refused_by_key(path, document, message):
+def test_unusable_tracked_sensors_are_refused_by_key(path, document, message):
     path.write_text(document, encoding="utf-8")
 
     with pytest.raises(cfg.ConfigError, match=message):
         cfg.load(path)
 
 
-def test_the_old_cpu_and_gpu_filters_become_the_sources_list(path):
+def test_a_label_is_kept_as_written(path):
+    """It is a sensor's exact name, not a pattern: a bracket is a bracket."""
+    path.write_text("sensors:\n  tracked:\n    aida64: ['CPU (Tctl)']\n", encoding="utf-8")
+
+    assert cfg.load(path).sensors.tracked == {"aida64": ["CPU (Tctl)"]}
+
+
+def test_the_old_provider_and_filters_are_ignored_with_a_warning(path, caplog):
+    """A breaking change: nothing is carried over, so the user picks the sensors again in Settings."""
+    path.write_text("sensors:\n  provider: lenovo-wmi\n  filters:\n    lenovo-wmi: [CPU, GPU, PCH]\n", encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        loaded = cfg.load(path)
+
+    assert loaded.sensors.tracked == {}, "an old setting must not start tracking anything"
+    assert "Ignoring unknown configuration key sensors.provider" in caplog.text
+    assert "Ignoring unknown configuration key sensors.filters" in caplog.text
+
+
+@pytest.mark.parametrize("key", ["cpu_filter", "gpu_filter"])
+def test_the_older_filter_keys_are_ignored_too(path, caplog, key):
+    path.write_text(f"sensors:\n  {key}: Core Max\n", encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        loaded = cfg.load(path)
+
+    assert loaded.sensors.tracked == {}
+    assert f"Ignoring unknown configuration key sensors.{key}" in caplog.text
+
+
+def test_saving_drops_the_old_keys(path):
     path.write_text(
-        "sensors:\n  provider: lhm-web\n  cpu_filter: CPU Package\n  gpu_filter: GPU Hot Spot\n", encoding="utf-8"
+        "sensors:\n  provider: lenovo-wmi\n  filters:\n    lenovo-wmi: [CPU, GPU, PCH]\n"
+        "  tracked:\n    lhm-web: [Core Max]\n",
+        encoding="utf-8",
     )
-
-    config = cfg.load(path)
-
-    assert cfg.filters_for(config, "lhm-web") == [r"CPU\ Package", r"GPU\ Hot\ Spot"]
-
-
-def test_an_old_filter_keeps_matching_its_text_literally(path):
-    """They were plain text, so "(Tctl)" must not turn into a regex group."""
-    from iets_speed_control.util.filters import select
-
-    path.write_text("sensors:\n  cpu_filter: CPU (Tctl)\n", encoding="utf-8")
-
-    patterns = cfg.filters_for(cfg.load(path), "aida64")
-
-    assert select({"CPU (Tctl)": 70.0, "CPU Tctl": 99.0}, patterns).max_value == 70.0
-
-
-def test_a_missing_old_key_keeps_its_old_default(path):
-    """A file with only cpu_filter still meant GPU for the GPU."""
-    path.write_text("sensors:\n  cpu_filter: Core Max\n", encoding="utf-8")
-
-    assert cfg.filters_for(cfg.load(path), "aida64") == [r"Core\ Max", "GPU"]
-
-
-def test_old_filters_equal_to_the_defaults_leave_no_entry(path):
-    path.write_text("sensors:\n  cpu_filter: CPU\n  gpu_filter: GPU\n", encoding="utf-8")
-
-    assert cfg.load(path).sensors.filters == {}
-
-
-def test_old_filters_do_not_override_a_list_already_there(path, caplog):
-    path.write_text("sensors:\n  cpu_filter: Core Max\n  filters:\n    aida64: [Package]\n", encoding="utf-8")
-
-    config = cfg.load(path)
-
-    assert cfg.filters_for(config, "aida64") == ["Package"]
-    assert any("Ignoring" in record.message for record in caplog.records)
-
-
-def test_old_filter_keys_are_not_reported_as_unknown(path, caplog):
-    path.write_text("sensors:\n  cpu_filter: Core Max\n", encoding="utf-8")
-
-    cfg.load(path)
-
-    assert not any("unknown" in record.message for record in caplog.records)
-
-
-def test_saving_writes_the_list_and_drops_the_old_keys(path):
-    path.write_text("sensors:\n  cpu_filter: Core Max\n", encoding="utf-8")
 
     cfg.save(cfg.load(path), path)
     text = path.read_text(encoding="utf-8")
 
-    assert "cpu_filter" not in text
-    assert cfg.filters_for(cfg.load(path), "aida64") == [r"Core\ Max", "GPU"]
+    assert "provider" not in text
+    assert "filters" not in text
+    assert cfg.load(path).sensors.tracked == {"lhm-web": ["Core Max"]}
+
+
+def test_a_tracked_set_survives_a_save_and_a_load(path):
+    config = cfg.Config()
+    config.sensors.tracked = {"lenovo-wmi": ["CPU", "GPU"], "nvidia": []}
+
+    cfg.save(config, path)
+
+    assert cfg.load(path).sensors.tracked == {"lenovo-wmi": ["CPU", "GPU"], "nvidia": []}
 
 
 def test_a_copy_does_not_share_the_lists():
     config = cfg.Config()
-    config.sensors.filters["aida64"] = ["CPU"]
+    config.sensors.tracked["aida64"] = ["CPU"]
 
     copied = cfg.copy(config)
-    copied.sensors.filters["aida64"].append("GPU")
+    copied.sensors.tracked["aida64"].append("GPU")
 
-    assert config.sensors.filters["aida64"] == ["CPU"]
-
-
-@pytest.mark.parametrize(("alias", "source"), [("ohm", "lhm"), ("Lenovo", "lenovo-wmi"), ("lhm_web", "lhm-web")])
-def test_old_filters_land_under_the_code_name_when_the_file_uses_an_alias(path, alias, source):
-    """Every reader looks the list up by the code name; under the alias it would be lost."""
-    path.write_text(f"sensors:\n  provider: {alias}\n  cpu_filter: Core Max\n", encoding="utf-8")
-
-    assert cfg.filters_for(cfg.load(path), source) == ["Core\\ Max", "GPU"]
+    assert config.sensors.tracked["aida64"] == ["CPU"]
 
 
-def test_a_repeated_filter_is_refused(path):
-    path.write_text("sensors:\n  filters:\n    aida64: [CPU, GPU, CPU]\n", encoding="utf-8")
+# --- the default speed ----------------------------------------------------------------------------
 
-    with pytest.raises(cfg.ConfigError, match=r"aida64\[2\].*already in the list"):
+
+def test_the_default_speed_is_half_and_is_not_written_while_it_is_half(path):
+    assert cfg.Config().control.default_speed == 50
+    cfg.save(cfg.Config(), path)
+
+    assert "default_speed" not in path.read_text(encoding="utf-8")
+
+
+def test_a_changed_default_speed_is_written_and_read_back(path):
+    config = cfg.Config()
+    config.control.default_speed = 35
+
+    cfg.save(config, path)
+
+    assert "default_speed: 35" in path.read_text(encoding="utf-8")
+    assert cfg.load(path).control.default_speed == 35
+
+
+@pytest.mark.parametrize("speed", [0, 1, 100])
+def test_a_default_speed_inside_the_range_is_accepted(path, speed):
+    path.write_text(f"control:\n  default_speed: {speed}\n", encoding="utf-8")
+
+    assert cfg.load(path).control.default_speed == speed
+
+
+@pytest.mark.parametrize("speed", ["-1", "101", "50.5", "true", "'50'", "~"])
+def test_a_default_speed_that_is_not_a_whole_number_within_0_100_is_refused(path, speed):
+    path.write_text(f"control:\n  default_speed: {speed}\n", encoding="utf-8")
+
+    with pytest.raises(cfg.ConfigError, match=r"control\.default_speed must be a whole number within 0-100"):
         cfg.load(path)
 
 
@@ -491,6 +539,15 @@ def test_every_alias_names_a_registered_source():
     from iets_speed_control.util.source_names import ALIASES
 
     assert set(ALIASES.values()) <= set(PROVIDERS)
+
+
+def test_the_source_names_are_exactly_the_registered_sources():
+    """The configuration cannot import the registry without a cycle, so it keeps its own list of names."""
+    from iets_speed_control.sensors import PROVIDERS
+    from iets_speed_control.util.source_names import SOURCE_NAMES
+
+    assert set(SOURCE_NAMES) == set(PROVIDERS)
+    assert len(SOURCE_NAMES) == len(set(SOURCE_NAMES))
 
 
 def test_a_relative_config_path_is_made_absolute_at_once(tmp_path):

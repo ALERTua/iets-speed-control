@@ -152,7 +152,7 @@ async def test_the_controller_does_not_report_an_outside_change_after_its_own_wr
     from iets_speed_control.util.config import CONFIG
 
     monkeypatch.setattr(CONFIG.control, "resync_every", 30)
-    controller = SpeedController(sensor_provider=_FixedSensors())
+    controller = SpeedController()
     controller.device = device
 
     # The real pattern: many writes, and a read-back only every resync_every ticks. That is what let
@@ -166,13 +166,6 @@ async def test_the_controller_does_not_report_an_outside_change_after_its_own_wr
 
     assert reported == 66, f"the device holds 66; the read-back said {reported}"
     assert "changed outside this app" not in caplog.text, caplog.text
-
-
-class _FixedSensors:
-    name = "fixed"
-
-    def get_temperatures(self):
-        return {"CPU": 70.0, "GPU": 70.0}
 
 
 # --- whether the port is usable ---------------------------------------------------------------

@@ -10,11 +10,11 @@ import asyncio
 import logging
 
 import pytest
+from conftest import controller_tracking
 from serial.serialutil import SerialException
 from test_control_smoothing import FakeDevice, ScriptedSensors
 
 from iets_speed_control import controller as controller_module
-from iets_speed_control.controller import SpeedController
 from iets_speed_control.entities import serial_device
 from iets_speed_control.entities.tasmota_fan import TasmotaSerialFan
 
@@ -191,7 +191,7 @@ def clock(monkeypatch):
 
 
 async def test_a_long_gap_between_ticks_reopens_the_port(clock):
-    controller = SpeedController(sensor_provider=ScriptedSensors([60]))
+    controller = controller_tracking(ScriptedSensors([60]))
     controller.device = device = CountingDevice()
 
     await controller._tick()
@@ -203,7 +203,7 @@ async def test_a_long_gap_between_ticks_reopens_the_port(clock):
 
 
 async def test_ordinary_ticks_leave_the_port_alone(clock):
-    controller = SpeedController(sensor_provider=ScriptedSensors([60]))
+    controller = controller_tracking(ScriptedSensors([60]))
     controller.device = device = CountingDevice()
 
     for _ in range(5):
@@ -215,7 +215,7 @@ async def test_ordinary_ticks_leave_the_port_alone(clock):
 
 async def test_a_reconnected_device_is_read_again_rather_than_trusted_from_memory(clock):
     """The last value written may never have reached a device that dropped off."""
-    controller = SpeedController(sensor_provider=ScriptedSensors([60]))
+    controller = controller_tracking(ScriptedSensors([60]))
     controller.device = device = CountingDevice()
     await controller._tick()
     reads = device.reads

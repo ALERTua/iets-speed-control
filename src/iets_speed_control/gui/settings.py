@@ -27,25 +27,22 @@ from tkinter import TclError
 import customtkinter as ctk
 from serial.tools.list_ports_windows import comports
 
-from ..controller import Mode, SpeedController
-from ..sensors import PROVIDER_LABELS, PROVIDER_NAMES, find_provider, lacks_admin_rights
+from ..controller import Mode, SpeedController, read_source
 from ..util.config import (
     CONFIG,
     CONFIG_PATH,
     LOG_LEVELS,
     ConfigError,
-    filters_for,
     get_value,
     set_value,
     with_value,
 )
 from ..util.config import defaults as config_defaults
 from ..util.config import save as save_config
-from ..util.filters import DEFAULT_FILTERS, Selection, select
 from ..util.logger import default_log_file
 from ..util.logger import reconfigure as reapply_log_settings
 from .curve_editor import CurveEditor
-from .filter_list import FilterList
+from .sensor_picker import SensorPicker
 from .theme import (
     BACKGROUND,
     CARD,
@@ -62,7 +59,9 @@ logger = logging.getLogger(__name__)
 
 BAUDRATES = ("9600", "19200", "38400", "57600", "115200")
 LHM_WEB = "lhm-web"
-ADMIN_NOTE = "Needs admin rights: restart as administrator"
+# How often the Sensors card reads its sources while it is on screen: often enough to watch a sensor
+# move, rarely enough that a slow source's read has finished before the next one starts.
+SENSOR_READ_MS = 2000
 
 
 def format_span(seconds: int) -> str:
@@ -256,9 +255,10 @@ class SettingsView(ctk.CTkFrame):
         self.sections: dict[str, SettingsSection] = {}
         self.active: str | None = None
         self.lhm_rows: list[SettingsRow] = []
-        # Numbers each sensor read, so a read that finishes after the source or the filters changed
-        # can be recognised as stale and dropped instead of painting an old verdict over the new state.
-        self._match_request = 0
+        # Numbers each read of the sources, so a read that finishes after the tracked sources changed, or
+        # after the card went away, can be recognised as stale and dropped instead of painting old values.
+        self._read_request = 0
+        self._reads_job: str | None = None
 
         self._build_body()
         self._build_curve_section()
@@ -269,6 +269,11 @@ class SettingsView(ctk.CTkFrame):
         self._build_logging_section()
         self._build_display_section()
         self.show(self.SECTION_NAMES[0])
+
+    def destroy(self):
+        # A read scheduled for later would otherwise run on a view that no longer exists.
+        self._stop_sensor_reads()
+        super().destroy()
 
     # --- shell ----------------------------------------------------------------------------
 
@@ -307,6 +312,8 @@ class SettingsView(ctk.CTkFrame):
             self.search.delete(0, "end")
 
         section = self.sections[name]
+        if self.active == "Sensors" and name != "Sensors":
+            self._stop_sensor_reads()
         # Repacking makes Tk lay out and redraw the whole scrollable body, so a section that is already
         # the only one on screen is left where it is.
         alone = all(bool(other.holder.winfo_manager()) == (other is section) for other in self.sections.values())
@@ -717,37 +724,11 @@ class SettingsView(ctk.CTkFrame):
     def _build_sensors_section(self):
         section = self._add_section("Sensors")
 
-        self.provider_row = self._choice_row(
-            section,
-            "Temperature source",
-            "Which monitoring app the readings come from",
-            "sensors.provider",
-            sorted(PROVIDER_NAMES),
-            # The menu shows the product name; the file keeps the code name.
-            # sensors.provider is validated as text on load, so str() never has to invent a label.
-            display=lambda name: PROVIDER_LABELS.get(str(name), str(name)),
-            parse=lambda label: PROVIDER_NAMES.get(label, label),
-            width=260,
-            apply=self._apply_provider,
-        )
-        # Its own label rather than the row's error line: a successful pick clears that line right
-        # after applying, and this note has to outlive the pick that caused it.
-        self.admin_label = ctk.CTkLabel(
-            self.provider_row.text, text=ADMIN_NOTE, font=("", 10), text_color=ERROR_COLOR, anchor="w"
-        )
-
-        # Each filter shows what it catches right now: a filter matching nothing reads 0 °C and quietly
-        # holds the fan at its minimum, so that belongs on screen rather than in the log. The list sits
-        # under its own row at full width, so its combo boxes do not widen the card's control column.
-        self.filters_row = section.add_row(
-            "Filters",
-            "The hottest match of any of them drives the curve",
-            ctk.CTkButton(section.card, text="Add filter", width=110, command=lambda: self.filter_list.add_filter()),
-        )
-        self.filter_list = FilterList(section.card, on_change=self._commit_filters, on_error=self._show_filter_error)
-        section.add_widget(self.filter_list, stretch=False)
-        self.filter_list.set_patterns(filters_for(CONFIG, self.controller.sensors.name))
-        section.register("sensors.filters", self._redisplay_filters)
+        # At full width under no row of its own, so its check boxes and the Add selector do not widen the
+        # card's control column and squeeze every description in the card.
+        self.sensor_picker = SensorPicker(section.card, on_change=self._commit_tracked)
+        section.add_widget(self.sensor_picker, stretch=False)
+        section.register("sensors.tracked", self._apply_tracked)
 
         self.lhm_rows = [
             self._entry_row(
@@ -782,93 +763,91 @@ class SettingsView(ctk.CTkFrame):
         ]
 
         self._reset_row(section)
-        section.on_show = self.refresh_sensor_match
-        section.after_reset = self._on_provider_reset
+        section.on_show = self._start_sensor_reads
+        self._apply_tracked()
+
+    def _commit_tracked(self, tracked: dict[str, list[str]]) -> str | None:
+        """Store a tracked set the picker proposes, and hand it to the controller."""
+        error = self._commit("sensors.tracked", tracked)
+        self._apply_tracked()
+        return error
+
+    def _apply_tracked(self):
+        """Bring the controller, the picker and the web-server rows in line with sensors.tracked.
+
+        Also how a change arriving the other way, a section Reset or a test restoring the configuration,
+        reaches the controller, so the card never shows sources the loop does not read.
+        """
+        sources_before = list(self.controller.sources)
+        self.controller.sync_sources()
+        self.sensor_picker.set_tracked(CONFIG.sensors.tracked)
+        self.sensor_picker.show_error(None)
         self._apply_lhm_visibility()
-        self._apply_admin_note()
-
-    def _apply_provider(self, name):
-        self._apply_lhm_visibility()
-        self._apply_admin_note()
-        try:
-            self.controller.sensors = name
-        except ValueError as e:
-            logger.error(f"Could not switch the sensor source: {e}")
-            self._show_filter_error(str(e))
-            return
-
-        # Each source keeps its own filters, so the list follows the source. Whatever the old source
-        # read or failed to read says nothing about this one, so its verdict goes too.
-        self._redisplay_filters()
-        self._show_filter_error(None)
-        self.refresh_sensor_match()
-
-    def _on_provider_reset(self):
-        self._apply_provider(CONFIG.sensors.provider)
+        if list(self.controller.sources) != sources_before and self._reads_job is not None:
+            # A new source shows its sensors now rather than at the next read, and an answer still on its
+            # way describes the sources as they were.
+            self._read_sources()
 
     def _apply_lhm_visibility(self):
-        """The web-server keys only mean anything for the lhm-web source."""
-        visible = CONFIG.sensors.provider == LHM_WEB
+        """The web-server keys only mean anything while the lhm-web source is tracked."""
+        visible = LHM_WEB in CONFIG.sensors.tracked
         for row in self.lhm_rows:
             row.set_visible(visible)
 
     def _apply_admin_note(self):
-        """Say next to the selector when the chosen source cannot work in a process that is not elevated."""
-        if lacks_admin_rights(find_provider(CONFIG.sensors.provider)):
-            if not self.admin_label.winfo_manager():
-                self.admin_label.pack(anchor="w", pady=(2, 0))
-        elif self.admin_label.winfo_manager():
-            self.admin_label.pack_forget()
+        """Say on each source that cannot work in a process that is not elevated."""
+        self.sensor_picker.refresh_admin_notes()
 
-    def _redisplay_filters(self):
-        self.filter_list.set_patterns(filters_for(CONFIG, self.controller.sensors.name))
+    def _start_sensor_reads(self):
+        """Read the sources now, and every SENSOR_READ_MS for as long as the Sensors card is on screen."""
+        self._read_sources()
+        self._schedule_sensor_reads()
 
-    def _commit_filters(self, patterns: list[str]) -> str | None:
-        """Store the active source's filters; a list equal to the defaults is not written at all."""
-        source = self.controller.sensors.name
-        filters = {key: list(value) for key, value in CONFIG.sensors.filters.items()}
-        if patterns == list(DEFAULT_FILTERS):
-            filters.pop(source, None)
-        else:
-            filters[source] = patterns
+    def _schedule_sensor_reads(self):
+        if self._reads_job is not None:
+            self.after_cancel(self._reads_job)
+        self._reads_job = self.after(SENSOR_READ_MS, self._sensor_reads_due)
 
-        error = self._commit("sensors.filters", filters)
-        if error is None:
-            self.refresh_sensor_match()
-        return error
+    def _sensor_reads_due(self):
+        self._reads_job = None
+        if self.active != "Sensors":
+            return
+        # Settings stays the active destination's content while Home is shown, so the card counts as
+        # on screen only while the view itself is.
+        if self.winfo_ismapped():
+            self._read_sources()
+        self._schedule_sensor_reads()
 
-    def _show_filter_error(self, message: str | None):
-        if message:
-            self.filters_row.show_error(message)
-        else:
-            self.filters_row.clear_error()
+    def _stop_sensor_reads(self):
+        if self._reads_job is not None:
+            self.after_cancel(self._reads_job)
+            self._reads_job = None
+        self._read_request += 1  # whatever is still on its way is for a card no longer shown
 
-    def refresh_sensor_match(self):
-        """Read the active source once, offer its sensors as filters, and show what each filter catches."""
-        self._match_request += 1
-        request = self._match_request
+    def _read_sources(self):
+        """Read every tracked source once, off the Tk thread, and show what each one answered."""
+        self._read_request += 1
+        request = self._read_request
+        sources = self.controller.sources
+        if not sources:
+            return
+
         self._in_background(
-            self.controller.sensors.get_temperatures,
-            lambda ok, payload: self._show_sensor_match(ok, payload, request),
+            lambda: {name: read_source(provider) for name, provider in sources.items()},
+            lambda ok, payload: self._show_source_reads(ok, payload, request),
         )
 
-    def _show_sensor_match(self, ok: bool, payload, request: int | None = None):
-        """Redraw the whole verdict from this one read, so nothing from an earlier read survives it."""
-        if request is not None and request != self._match_request:
-            logger.debug(f"Dropping sensor read #{request}; #{self._match_request} is the current one")
+    def _show_source_reads(self, ok: bool, payload, request: int | None = None):
+        if request is not None and request != self._read_request:
+            logger.debug(f"Dropping sensor read #{request}; #{self._read_request} is the current one")
             return
 
-        self._show_filter_error(None)
         if not ok:
-            self.filter_list.show_selection(Selection())
-            self._show_filter_error(f"Reading {self.controller.sensors.name} failed: {payload}")
+            # read_source never raises, so this is a fault of the reading code itself.
+            logger.error(f"Reading the sources failed: {payload!r}")
             return
 
-        readings: dict[str, float] = payload or {}
-        self.filter_list.set_suggestions(list(readings))
-        self.filter_list.show_selection(select(readings, filters_for(CONFIG, self.controller.sensors.name)))
-        if not readings:
-            self._show_filter_error(f"No readings from {self.controller.sensors.name}")
+        self.sensor_picker.show_reads(payload)
 
     # --- Device ---------------------------------------------------------------------------
 
@@ -1001,6 +980,14 @@ class SettingsView(ctk.CTkFrame):
             "Hysteresis",
             "Ignore changes smaller than this many percent",
             "control.ignore_less_than",
+            parse=parse_int,
+            width=100,
+        )
+        self._entry_row(
+            section,
+            "Default speed",
+            "With nothing to track, on Stop and on exit",
+            "control.default_speed",
             parse=parse_int,
             width=100,
         )

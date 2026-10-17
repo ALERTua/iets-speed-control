@@ -3,41 +3,50 @@
 [![Stand With Ukraine](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/StandWithUkraine.svg)](https://stand-with-ukraine.pp.ua)
 [![Russian Warship Go Fuck Yourself](https://raw.githubusercontent.com/vshymanskyy/StandWithUkraine/main/badges/RussianWarship.svg)](https://stand-with-ukraine.pp.ua)
 
-Control the PWM of your laptop cooling pad fan using ESP32 via USB, based on your Windows CPU/GPU temperatures, taken
-from AIDA64.
+Control the PWM of your laptop cooling pad fan using ESP32 via USB, based on the Windows CPU/GPU temperatures that you choose to track, taken
+from AIDA64, LibreHardwareMonitor, a Lenovo Legion laptop or the NVIDIA driver.
 
 ![Home](docs/images/home.png)
 
 ### How it works
 
-- Gets temperatures from AIDA64
-- Keeps the readings that your filters select (by default, every label with `CPU` or `GPU` in it)
+- Reads temperatures from every source that has a tracked sensor, all at the same time
+- Keeps the readings of the sensors that you track. A tracked sensor is one exact sensor name of one source
 - Takes the hottest of them and maps it through the fan curve
 - Sends PWM command (`Dimmer {value}` by default) to the serial device
+- When there is nothing to go on, runs the fan at the default speed (`control.default_speed`, 50 % unless you change it)
 
 ### The interface
 
 | | |
 | --- | --- |
 | ![Curve](docs/images/settings-curve.png) | **Curve** — the fan curve. Drag a selected point, double-click to add, `Del` to remove, `Ctrl+Z` to undo. The temperature axis is broken at 30 °C so the range worth editing gets the width |
-| ![Sensors](docs/images/settings-sensors.png) | **Sensors** — the temperature source and its list of filters, with what each filter catches right now and which one gives the maximum |
+| ![Sensors](docs/images/settings-sensors.png) | **Sensors** — the sensor picker. It lists every sensor that each source reports right now, and you tick the ones that drive the fan. The reading of each tracked sensor is shown, and the one that gives the maximum is marked |
 | ![Manual](docs/images/settings-manual.png) | **Manual** — a fixed speed instead of the curve. The mode and the speed are both remembered between runs |
 
-### Temperature Source
+### Temperature Sources
 
-Pick one with `sensors.provider` in the config file:
+Track sensors from one source or from several at once, in Settings → Sensors or under `sensors.tracked` in the config file (see [CONFIG.md](CONFIG.md)). A source is read while it is listed there, and one listed with no sensor drives nothing yet: Settings uses it to show what the source offers. The code name in the first column is the key in `sensors.tracked`:
 
-| `sensors.provider` | Source                          | Notes                                                                                               |
-|--------------------|---------------------------------|-----------------------------------------------------------------------------------------------------|
-| `aida64` (default) | AIDA64 via WMI                  | Paid, must stay running                                                                             |
-| `lhm`              | LibreHardwareMonitor via WMI    | Free; falls back to the OpenHardwareMonitor namespace. Not every machine registers the WMI provider |
-| `lhm-web`          | LibreHardwareMonitor web server | Free; works where the WMI provider does not                                                         |
-| `lenovo-wmi`       | Lenovo Legion embedded controller via WMI | Lenovo Legion laptops only; no monitoring app needed, but this app must run as administrator |
-| `nvidia`           | NVIDIA display driver (NVAPI)   | NVIDIA GPUs only; no monitoring app and no administrator rights needed. Reads the GPU only, no CPU temperature |
+| Code name    | Source                          | Notes                                                                                               |
+|--------------|---------------------------------|-----------------------------------------------------------------------------------------------------|
+| `aida64`     | AIDA64 via WMI                  | Paid, must stay running                                                                             |
+| `lhm`        | LibreHardwareMonitor via WMI    | Free; falls back to the OpenHardwareMonitor namespace. Not every machine registers the WMI provider |
+| `lhm-web`    | LibreHardwareMonitor web server | Free; works where the WMI provider does not                                                         |
+| `lenovo-wmi` | Lenovo Legion embedded controller via WMI | Lenovo Legion laptops only; no monitoring app needed, but this app must run as administrator |
+| `nvidia`     | NVIDIA display driver (NVAPI)   | NVIDIA GPUs only; no monitoring app and no administrator rights needed. Reads the GPU only, no CPU temperature |
 
-Sensor labels differ between sources, so each source keeps its own list of filters (`sensors.filters`, see [CONFIG.md](CONFIG.md)). A filter is a regular expression that ignores case. The hottest reading any filter matches drives the curve. A filter that matches nothing is shown in red in Settings → Sensors, and if no filter matches anything the app reads 0 °C, which holds the fan at the curve's floor.
+Sensor names differ between sources, and two sources can use the same name, so the set is kept per source. The hottest tracked reading from any source drives the curve. A reading counts only when it is a live temperature between 0 °C (excluded) and 150 °C: sources report 0 °C for a sensor they lack, and a limit or a margin is not a temperature.
 
-If the source itself stops answering — AIDA64 closed, LibreHardwareMonitor's web server unreachable, this app not elevated for `lenovo-wmi`, or the NVIDIA GPU asleep for `nvidia` — the tray icon turns red and Home says which source went quiet. The fan keeps running on the curve's floor until it comes back.
+**Nothing tracked.** An empty set means monitoring is stopped: no reading drives the fan, and the fan runs at the default speed (`control.default_speed`, 50 % unless you change it). A fresh install starts this way, so pick the sensors in Settings → Sensors first.
+
+**A source goes quiet.** If a source stops answering — AIDA64 closed, LibreHardwareMonitor's web server unreachable, or this app not elevated for `lenovo-wmi` — the tray icon turns red and Home says which source went quiet. The fan follows the hottest reading of the other tracked sources. When no tracked sensor has a reading at all, the fan runs at the default speed.
+
+**A sleeping GPU.** An NVIDIA GPU that is powered off is cold, not broken: it does not turn the icon red. When every source that has a tracked sensor is asleep, the curve reads 0 °C and runs on its floor, not at the default speed.
+
+**Stop and exit.** Stopping the control loop, and exiting the app, set the fan to the default speed as well, because nothing watches the temperatures any more.
+
+**Breaking change.** `sensors.provider`, `sensors.filters`, `sensors.cpu_filter` and `sensors.gpu_filter` no longer exist. The app ignores them with a warning in the log, carries nothing over, and the next save drops them from the file. Pick the sensors again in Settings → Sensors, or write `sensors.tracked`. Until you do, nothing is tracked and the fan runs at the default speed.
 
 #### AIDA64 Preparation
 
@@ -64,7 +73,7 @@ supported CPU cores, mainboard chips (ITE, Fintek, Nuvoton, Winbond), GPUs, driv
 one. If your chip is not on that list, no interface will produce a temperature for it — check what the
 LibreHardwareMonitor window itself shows before blaming this app.
 
-##### Via WMI (`sensors.provider: lhm`)
+##### Via WMI (`lhm`)
 
 Needs nothing beyond running as administrator: LibreHardwareMonitor publishes sensors to WMI on its own, under
 the `root\LibreHardwareMonitor` namespace (`root\OpenHardwareMonitor` is tried as a fallback, and the original
@@ -84,7 +93,7 @@ no matter how the app is started.
 
 Sensor labels here are the bare names LibreHardwareMonitor shows, such as `CPU Package` or `GPU Hot Spot`.
 
-##### Via the web server (`sensors.provider: lhm-web`)
+##### Via the web server (`lhm-web`)
 
 Works wherever the app itself works, since it bypasses WMI entirely.
 
@@ -101,16 +110,16 @@ poll as `rejected the credentials`, and any `user:password@` embedded in the URL
 Labels are `<hardware>/<sensor>`, for example `NVIDIA GeForce RTX 4090 Laptop GPU/GPU Hot Spot`. Open
 `sensors.lhm_web.url` in a browser to see the exact labels your machine reports.
 
-LibreHardwareMonitor also reports entries under the Temperature type that are not live temperatures: `Distance to TjMax`, which *falls* as the chip heats up, fixed limits such as `Critical Temperature` or `Thermal Sensor High Limit`, and `Temperature Sensor Resolution`. Both LibreHardwareMonitor sources drop them, so no filter can drive the fan from one of them. They are still visible in the LibreHardwareMonitor window.
+LibreHardwareMonitor also reports entries under the Temperature type that are not live temperatures: `Distance to TjMax`, which *falls* as the chip heats up, fixed limits such as `Critical Temperature` or `Thermal Sensor High Limit`, and `Temperature Sensor Resolution`. Both LibreHardwareMonitor sources drop them, so none of them can be tracked to drive the fan. They are still visible in the LibreHardwareMonitor window.
 
-#### Lenovo Legion Preparation (`sensors.provider: lenovo-wmi`)
+#### Lenovo Legion Preparation (`lenovo-wmi`)
 
 Reads the CPU, GPU and chipset (PCH) temperatures straight from the laptop's embedded controller, through Lenovo's own WMI class `LENOVO_OTHER_METHOD`. Lenovo Legion Toolkit uses the same class for its CPU and GPU temperatures. Neither it nor any other monitoring app has to run.
 
 - Run IETS Speed Control as administrator. Windows refuses this WMI class to a process without administrator rights
 - If the app runs without administrator rights, Settings -> Sensors shows a red note under the source selector, and Home shows `No temperatures from lenovo-wmi: restart as administrator`
 
-The labels are `CPU`, `GPU` and `PCH`, so the default filters `CPU` and `GPU` work as they are. Add `PCH` to the filter list to let the chipset drive the fan too. A model that does not report one of these sensors simply leaves it out. Check what your machine reports from an elevated PowerShell:
+The labels are `CPU`, `GPU` and `PCH`. Track `PCH` as well to let the chipset drive the fan. A model that does not report one of these sensors simply leaves it out. Check what your machine reports from an elevated PowerShell:
 
 ```powershell
 $m = Get-CimInstance -Namespace root\WMI -ClassName LENOVO_OTHER_METHOD
@@ -119,13 +128,13 @@ Invoke-CimMethod -InputObject $m -MethodName GetFeatureValue -Arguments @{ IDs =
 
 The HWiNFO64 switch in the Lenovo Legion Toolkit settings is not needed for this source. That switch only shares fan speeds and the battery temperature with HWiNFO64.
 
-#### NVIDIA Driver Preparation (`sensors.provider: nvidia`)
+#### NVIDIA Driver Preparation (`nvidia`)
 
-Reads the GPU temperatures straight from the NVIDIA display driver, through `nvapi64.dll`, which every NVIDIA driver installs. No monitoring app has to run, and the app needs no administrator rights. It reads the first NVIDIA GPU only, and it reads no CPU temperature, so use it for a GPU-only filter list or wait for a later change that reads several sources at once.
+Reads the GPU temperatures straight from the NVIDIA display driver, through `nvapi64.dll`, which every NVIDIA driver installs. No monitoring app has to run, and the app needs no administrator rights. It reads the first NVIDIA GPU only, and it reads no CPU temperature, so track a CPU sensor from another source next to it.
 
-The labels are `GPU Core`, `GPU Hot Spot` and `GPU Memory Junction`, the same as in LibreHardwareMonitor, so the default filter `GPU` matches all of them and the hottest drives the fan. A GPU that has no hot spot or memory junction sensor leaves that label out. An RTX 50 series card has no hot spot.
+The labels are `GPU Core`, `GPU Hot Spot` and `GPU Memory Junction`, the same as in LibreHardwareMonitor. Track the ones you want, and the hottest of them drives the fan. A GPU that has no hot spot or memory junction sensor leaves that label out. An RTX 50 series card has no hot spot.
 
-On a laptop with switchable graphics the NVIDIA GPU powers off when nothing uses it, and reading its temperature would power it on again. So the source asks the driver first whether the GPU is powered and returns no readings while it sleeps. The curve then runs on its floor until a program wakes the GPU. The source logs the sleep and the wake-up at debug level only.
+On a laptop with switchable graphics the NVIDIA GPU powers off when nothing uses it, and reading its temperature would power it on again. So the source asks the driver first whether the GPU is powered and returns no readings while it sleeps. If nothing else is tracked, the curve then runs on its floor until a program wakes the GPU. The source logs the sleep and the wake-up at debug level only.
 
 Check what the driver says with `nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader`. That number is the `GPU Core` reading. Hot spot and memory junction come from an NVAPI call that NVIDIA does not document, and they can be wrong or missing on a driver that changes it.
 
@@ -151,7 +160,7 @@ Everything is optional: without a config file the app runs on its defaults.
 #### GUI
 
 - Run `just gui`, or `uv run iets-speed-control-gui` without just
-- **Home** shows the connection state, the maximum the filters match, the fan speed, every filter with its current reading and sensor (the one giving the maximum is marked with ▶, one matching nothing is red), and a history graph of the maximum
+- **Home** shows the connection state, the maximum of the tracked sensors, the fan speed, every tracked sensor with its current reading (the one giving the maximum is marked with ▶), and a history graph of the maximum
   (ten minutes by default, adjustable in Settings -> Display)
 - **Settings** covers every configuration key, one card per section, with a search box across them:
   - **Curve** is the fan curve editor. The temperature axis is broken at 30 °C: below that nothing
@@ -160,9 +169,8 @@ Everything is optional: without a config file the app runs on its defaults.
     double-click to add, right-click or `Del` to remove, `Ctrl+Z` to undo. Undo is per session and
     is never written to the config file. Neighbouring points follow along so the curve stays
     monotonic, as in MSI Afterburner
-  - **Sensors** picks the temperature source and edits its filter list. Type a regular expression,
-    or pick a sensor the source reports now. Each filter shows what it catches, the one that
-    gives the maximum is marked, and a filter that matches nothing is shown in red
+  - **Sensors** picks the tracked sensors. It lists what every source reports now, and you tick the
+    sensors that drive the fan, from any number of sources. The one that gives the maximum is marked
   - **Device** holds the serial settings; they take effect on **Reconnect**
   - **Control**, **Logging** and **Display** hold the tuning, log level, graph timeline and the
     start-minimized and minimize-to-tray switches
@@ -209,7 +217,7 @@ uv run iets-speed-control
 ```
 
 ```
-2026-07-31 22:45:22 | INFO | iets_speed_control.controller | CPU: 79, GPU: 88. Dimmer: 75 -> 72
+2026-07-31 22:45:22 | INFO | iets_speed_control.controller | Max: 88 (nvidia/GPU Core). Dimmer: 75 -> 72
 ```
 
 Launched without a console the GUI has nowhere to print, so if you need a record of a GUI session, turn a

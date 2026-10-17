@@ -1,6 +1,6 @@
 """Reconfiguring the controller while it runs.
 
-The settings panel can change the sensor source, the smoothing window and the serial port without a
+The settings panel can change the tracked sensors, the smoothing window and the serial port without a
 restart. Each of those is read somewhere the configuration object cannot reach on its own, so each
 needs code -- and a test that the code is what actually runs.
 """
@@ -12,9 +12,10 @@ import pytest
 
 from iets_speed_control.controller import SpeedController
 from iets_speed_control.entities.tasmota_fan import TasmotaSerialFan
-from iets_speed_control.sensors import Aida64Provider, LibreHardwareMonitorWebProvider
+from iets_speed_control.sensors import LibreHardwareMonitorWebProvider
 from iets_speed_control.util import config as cfg
 from iets_speed_control.util.config import CONFIG
+from iets_speed_control.util.tracking import SourceState
 
 
 @pytest.fixture
@@ -36,7 +37,8 @@ class FakeProvider:
 
 @pytest.fixture
 def controller():
-    return SpeedController(sensor_provider=FakeProvider())
+    CONFIG.sensors.tracked = {"aida64": ["CPU"]}
+    return SpeedController(sources={"aida64": FakeProvider()})
 
 
 # --- the device is built from the configuration, not from the import ------------------------------
@@ -65,41 +67,69 @@ def test_explicit_arguments_still_win(clean_config):
     assert TasmotaSerialFan(port="COM9").port == "COM9"
 
 
-# --- swapping the sensor source ------------------------------------------------------------------
+# --- changing the tracked sources ----------------------------------------------------------------
 
 
-def test_the_source_can_be_swapped_by_name(controller):
-    controller.sensors = "aida64"
-    assert isinstance(controller.sensors, Aida64Provider)
-
-    controller.sensors = "lhm-web"
-    assert isinstance(controller.sensors, LibreHardwareMonitorWebProvider)
+def test_a_source_that_is_given_stands_in_for_its_code_name(controller):
+    assert isinstance(controller.sources["aida64"], FakeProvider)
 
 
-def test_swapping_the_source_starts_the_smoothers_over(controller):
+def test_a_new_tracked_source_is_created_by_its_code_name(controller):
+    CONFIG.sensors.tracked = {"aida64": ["CPU"], "lhm-web": []}
+
+    controller.sync_sources()
+
+    assert isinstance(controller.sources["lhm-web"], LibreHardwareMonitorWebProvider)
+
+
+def test_a_source_that_stays_keeps_its_instance(controller):
+    """A source holds its own state (a logged warning, a found GPU), which an edit elsewhere must not cost."""
+    CONFIG.sensors.tracked = {"aida64": ["CPU"], "lhm-web": []}
+    controller.sync_sources()
+    given, created = controller.sources["aida64"], controller.sources["lhm-web"]
+
+    CONFIG.sensors.tracked = {"aida64": ["CPU"], "lhm-web": ["Core Max"], "nvidia": []}
+    controller.sync_sources()
+
+    assert controller.sources["aida64"] is given
+    assert controller.sources["lhm-web"] is created
+
+
+def test_a_source_that_is_removed_is_dropped(controller):
+    CONFIG.sensors.tracked = {"lhm-web": []}
+
+    controller.sync_sources()
+
+    assert list(controller.sources) == ["lhm-web"]
+
+
+def test_changing_the_sources_starts_the_smoothers_over(controller):
     controller._smoother.add(90)
+    CONFIG.sensors.tracked = {"aida64": ["CPU"], "lhm-web": []}
 
-    controller.sensors = "aida64"
+    controller.sync_sources()
 
-    assert controller._smoother.samples == (), "readings from the old source say nothing about the new one"
+    assert controller._smoother.samples == (), "readings of the old set say nothing about the new one"
 
 
-def test_swapping_to_the_same_object_changes_nothing(controller):
+def test_an_unchanged_set_keeps_the_smoothing_history(controller):
     controller._smoother.add(70)
-    same = controller.sensors
 
-    controller.sensors = same
+    controller.sync_sources()
 
     assert controller._smoother.samples == (70.0,)
 
 
-def test_an_unknown_source_is_refused(controller):
-    before = controller.sensors
+def test_a_removed_source_takes_its_verdict_with_it(controller):
+    """A source that is gone cannot be silent, so it must not keep the tray red."""
+    controller._source_states = {"aida64": SourceState.SILENT}
+    controller._sensors_ok = False
+    CONFIG.sensors.tracked = {"lhm-web": []}
 
-    with pytest.raises(ValueError, match="Unknown sensors.provider"):
-        controller.sensors = "nonesuch"
+    controller.sync_sources()
 
-    assert controller.sensors is before
+    assert controller.sensors_ok
+    assert controller.source_states == {}
 
 
 # --- resizing the smoothing window ---------------------------------------------------------------

@@ -22,7 +22,7 @@ from iets_speed_control.sensors import (
     nvidia,
 )
 from iets_speed_control.sensors import base as sensors_base
-from iets_speed_control.util.filters import DEFAULT_FILTERS, select
+from iets_speed_control.sensors.base import is_plausible
 
 RTX_4090 = "NVIDIA GeForce RTX 4090 Laptop GPU"
 RTX_3080 = "NVIDIA GeForce RTX 3080 Laptop GPU"
@@ -445,13 +445,12 @@ def test_two_threads_polling_at_once_set_up_once():
     assert results == [{"GPU Core": 54.0, "GPU Hot Spot": 70.5, "GPU Memory Junction": 80.0}] * 4
 
 
-def test_the_default_filters_match_the_gpu_readings():
+def test_every_label_it_reports_can_be_tracked():
+    """A label the plausibility check refused could be offered in Settings but never drive the fan."""
     readings = provider_for(FakeDriver()).get_temperatures()
 
-    selection = select(readings, DEFAULT_FILTERS)
-
-    assert selection.max_value == 80.0
-    assert any(match.pattern == "GPU" for match in selection.matches)
+    assert set(readings) == {"GPU Core", "GPU Hot Spot", "GPU Memory Junction"}
+    assert all(is_plausible(label, value) for label, value in readings.items())
 
 
 def test_it_is_registered_and_needs_no_administrator_rights(monkeypatch):
