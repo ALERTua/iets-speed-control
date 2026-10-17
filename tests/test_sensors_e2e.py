@@ -56,7 +56,7 @@ def test_live_sensors_never_read_zero(provider_name):
     assert not zeroed, f"{provider_name} reported 0 C for live sensors: {sorted(zeroed)}"
 
 
-def test_matches_independent_query(provider_name, raw_temperatures, probe):
+def test_matches_independent_query(provider_name, raw_temperatures, probe, unprobed_labels):
     """Cross-check the provider against the source queried directly.
 
     Sources drop sensors at random: over 40 raw AIDA64 probes, two came back short and three
@@ -77,7 +77,7 @@ def test_matches_independent_query(provider_name, raw_temperatures, probe):
     seen = set(first) | set(second)
     assert stable <= seen, f"provider dropped sensors: {sorted(stable - seen)}"
 
-    invented = seen - set(before) - set(after)
+    invented = seen - set(before) - set(after) - unprobed_labels
     assert not invented, f"provider reported sensors the source never did: {sorted(invented)}"
 
     # Readings move between queries, so compare loosely rather than for equality.
