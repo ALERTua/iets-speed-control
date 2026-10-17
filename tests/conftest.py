@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -271,19 +272,45 @@ def probe_lenovo_wmi() -> dict[str, float]:
     return found
 
 
+def probe_nvidia() -> dict[str, float]:
+    """The core temperature from nvidia-smi, which asks the driver through NVML, not NVAPI.
+
+    It has no hot spot or memory junction, so only "GPU Core" can be compared.
+    """
+    try:
+        answer = subprocess.run(
+            ["nvidia-smi", "--query-gpu=temperature.gpu", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        ).stdout
+        return {"GPU Core": float(answer.splitlines()[0])}
+    except Exception as e:  # noqa: BLE001 -- a missing nvidia-smi, a failed run and odd output all mean "unavailable"
+        logger.debug(f"nvidia-smi probe failed: {e}")
+        return {}
+
+
 PROBES = {
     "aida64": probe_aida64,
     "lhm": probe_lhm,
     "lhm-web": probe_lhm_web,
     "lenovo-wmi": probe_lenovo_wmi,
+    "nvidia": probe_nvidia,
 }
 
 SOURCE_HINTS = {
     "aida64": "AIDA64 must be running with 'write sensors to WMI' and temperature sensors enabled",
     "lhm": "LibreHardwareMonitor must be running as administrator so it registers its WMI provider",
     "lenovo-wmi": "needs a Lenovo Legion laptop and a test run as administrator",
+    "nvidia": "needs an NVIDIA GPU with its driver installed, and nvidia-smi on the PATH",
     "lhm-web": "LibreHardwareMonitor must serve sensors.lhm_web.url (Options -> Remote Web Server -> Run)",
 }
+
+
+# Labels a source reports that its probe cannot see, so the cross-check must not call them invented.
+# nvidia-smi has no hot spot or memory junction, only the core.
+UNPROBED_LABELS = {"nvidia": {"GPU Hot Spot", "GPU Memory Junction"}}
 
 
 def use_this_machines_web_server():
@@ -322,6 +349,18 @@ def provider_name(request) -> str:
 def probe(provider_name):
     """Callable that reads temperatures straight from the source, bypassing the provider."""
     return PROBES[provider_name]
+
+
+@pytest.fixture
+def nvidia_smi():
+    """The nvidia-smi probe, for the tests that are about the NVIDIA source alone."""
+    return probe_nvidia
+
+
+@pytest.fixture
+def unprobed_labels(provider_name) -> set[str]:
+    """Labels this source reports that its probe cannot see."""
+    return UNPROBED_LABELS.get(provider_name, set())
 
 
 @pytest.fixture

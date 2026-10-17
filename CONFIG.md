@@ -90,7 +90,7 @@ The serial device that drives the fan.
 
 | Key          | Default  | Meaning                                                                                                       |
 |--------------|----------|---------------------------------------------------------------------------------------------------------------|
-| `provider`   | `aida64` | `aida64`, `lhm` (LibreHardwareMonitor via WMI), `lhm-web` (its web server) or `lenovo-wmi` (Lenovo Legion embedded controller; the app must run as administrator). See README for what each needs. |
+| `provider`   | `aida64` | `aida64`, `lhm` (LibreHardwareMonitor via WMI), `lhm-web` (its web server), `lenovo-wmi` (Lenovo Legion embedded controller; the app must run as administrator) or `nvidia` (the NVIDIA display driver; GPU temperatures only, no administrator rights). See README for what each needs. |
 | `filters`    | `{}`     | The filters of each source, by its code name. A source without an entry uses `[CPU, GPU]`. |
 
 ### `sensors.filters`
