@@ -71,6 +71,8 @@ class SpeedController:
         # Whether every tracked source answered. A provider that cannot reach its app returns no readings
         # rather than raising, which would otherwise look like a cold machine.
         self._sensors_ok = True
+        # The silent sources with their states, as last announced: a change of it redraws the status line.
+        self._silence: tuple[tuple[str, SourceState], ...] = ()
         # Whether the previous tick raised, so a lasting fault is reported once rather than every tick.
         self._tick_failing = False
         # The same for a fault outside the tick, in the loop's own reporting or waiting.
@@ -134,16 +136,23 @@ class SpeedController:
         """Whether every tracked source answered its last read. A sleeping GPU counts as answering."""
         return self._sensors_ok
 
-    def _set_sensors_ok(self, value: bool):
-        """Record whether the sources answered, announcing only the transitions."""
-        if value == self._sensors_ok:
+    def _update_silence(self):
+        """Record which sources gave nothing, announcing each change of that set rather than every tick.
+
+        The set, not only whether it is empty: Home names each silent source and its reason, so a source
+        that went quiet, recovered, needs other rights or was removed while another stays silent must
+        reach the status line too.
+        """
+        silence = tuple((name, self._source_states[name]) for name in self.silent_sources)
+        if silence == self._silence:
             return
 
-        self._sensors_ok = value
-        if value:
-            logger.info("Every temperature source is answering again")
+        self._silence = silence
+        self._sensors_ok = not silence
+        if silence:
+            logger.error(f"No temperatures from {', '.join(name for name, _state in silence)}")
         else:
-            logger.error(f"No temperatures from {', '.join(self.silent_sources)}")
+            logger.info("Every temperature source is answering again")
         self._notify_status()
 
     @property
@@ -221,19 +230,23 @@ class SpeedController:
         while the GUI calls this from Tk. Unknown names never get here: the configuration rejects them.
         """
         wanted = list(CONFIG.sensors.tracked)
-        if wanted == list(self._sources):
-            return
+        if wanted != list(self._sources):
+            current = self._sources
+            self._sources = {
+                name: current.get(name) or self._given_sources.get(name) or create_provider(name) for name in wanted
+            }
+            # What the old set read says nothing about the new one: start the smoothing over, and drop the
+            # readings and the verdict of sources that are gone.
+            self._reset_smoothers()
+            self._source_states = {name: state for name, state in self._source_states.items() if name in self._sources}
+            self._readings = {name: readings for name, readings in self._readings.items() if name in self._sources}
+            logger.info(f"Reading {', '.join(wanted) or 'no source'}")
 
-        current = self._sources
-        self._sources = {
-            name: current.get(name) or self._given_sources.get(name) or create_provider(name) for name in wanted
-        }
-        # What the old set read says nothing about the new one: start the smoothing over, and drop the
-        # verdict of sources that are gone.
-        self._reset_smoothers()
-        self._source_states = {name: state for name, state in self._source_states.items() if name in self._sources}
-        self._sensors_ok = not self.silent_sources
-        logger.info(f"Reading {', '.join(wanted) or 'no source'}")
+        # An edit shows at once, without waiting for a tick that a stopped loop never runs: Home drops the
+        # rows and the status of what is no longer tracked.
+        self._selection = select(self._readings, CONFIG.sensors.tracked)
+        self._update_silence()
+        self._notify_temps()
 
     @property
     def temp_window(self) -> int:
@@ -495,7 +508,7 @@ class SpeedController:
         answers = await asyncio.gather(*(asyncio.to_thread(read_source, provider) for provider in sources.values()))
         self._readings = {name: readings for name, (_state, readings) in zip(sources, answers, strict=True)}
         self._source_states = {name: state for name, (state, _readings) in zip(sources, answers, strict=True)}
-        self._set_sensors_ok(not self.silent_sources)
+        self._update_silence()
 
         tracked = CONFIG.sensors.tracked
         self._selection = select(self._readings, tracked)

@@ -219,6 +219,21 @@ def test_nothing_tracked_keeps_the_tray_green(panel, monkeypatch):
     assert "No temperatures" not in panel.status_label.cget("text")
 
 
+def test_removing_the_silent_source_clears_its_error_on_home(panel, monkeypatch):
+    """Adding LibreHardwareMonitor and removing it again left its error on Home until a restart."""
+    panel.controller._connected = True
+    panel.controller._update_silence()
+    panel._drain()
+    assert "No temperatures from" in panel.status_label.cget("text"), "test setup: the error must show"
+
+    monkeypatch.setattr(CONFIG.sensors, "tracked", {})
+    panel.controller.sync_sources()
+    panel._drain()
+
+    assert "No temperatures" not in panel.status_label.cget("text")
+    assert panel.shell.healthy[-1] is True
+
+
 def test_a_missing_device_still_reads_as_disconnected(panel):
     """Both can be wrong at once; the serial link is the one you fix first."""
     panel._apply_status(connected=False, running=True, sensors_ok=False)
