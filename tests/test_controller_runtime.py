@@ -120,16 +120,96 @@ def test_an_unchanged_set_keeps_the_smoothing_history(controller):
     assert controller._smoother.samples == (70.0,)
 
 
-def test_a_removed_source_takes_its_verdict_with_it(controller):
-    """A source that is gone cannot be silent, so it must not keep the tray red."""
-    controller._source_states = {"aida64": SourceState.SILENT}
-    controller._sensors_ok = False
-    CONFIG.sensors.tracked = {"lhm-web": []}
+class SilentProvider:
+    name = "silent"
 
+    def get_temperatures(self):
+        return {}
+
+
+def two_sources_one_silent():
+    """aida64 answers and lhm gives nothing, after one tick, with every status report recorded."""
+    CONFIG.sensors.tracked = {"aida64": ["CPU"], "lhm": ["CPU Package"]}
+    controller = SpeedController(sources={"aida64": FakeProvider(), "lhm": SilentProvider()})
+    controller.device = OnlineDevice()
+    reports = []
+    temps = []
+    controller.set_callbacks(
+        on_status_change=lambda *status: reports.append(status), on_temps_change=lambda *t: temps.append(t)
+    )
+    return controller, reports, temps
+
+
+class OnlineDevice:
+    port = "FAKE"
+    connected = True
+
+    def describe(self):
+        return self.port
+
+    async def connect(self):
+        return True
+
+    async def disconnect(self):
+        pass
+
+    async def read_speed(self):
+        return 0
+
+    async def set_speed(self, value):
+        pass
+
+
+async def test_removing_a_silent_source_clears_its_error_at_once():
+    """Home kept "No temperatures from LibreHardwareMonitor (WMI)" after the source was removed.
+
+    The error is redrawn from the status report, and removing the source changed the verdict without
+    sending one; a stopped loop would never send it at all.
+    """
+    controller, reports, _temps = two_sources_one_silent()
+    await controller._tick()
+    assert reports[-1][2] is False and controller.silent_sources == ["lhm"], "test setup: lhm must be silent"
+
+    CONFIG.sensors.tracked = {"aida64": ["CPU"]}
     controller.sync_sources()
 
+    assert reports[-1][2] is True, "the status line must hear that nothing is silent any more"
     assert controller.sensors_ok
-    assert controller.source_states == {}
+    assert controller.source_states == {"aida64": SourceState.OK}
+
+
+async def test_a_change_among_the_silent_sources_is_reported_even_while_one_stays_silent():
+    """The status line names each silent source, so a change of the set must reach it, not only of the flag."""
+    controller, reports, _temps = two_sources_one_silent()
+    CONFIG.sensors.tracked = {"aida64": ["CPU"], "lhm": ["CPU Package"], "lhm-web": ["CPU Package"]}
+    controller._given_sources["lhm-web"] = SilentProvider()
+    controller.sync_sources()
+    await controller._tick()
+    assert controller.silent_sources == ["lhm", "lhm-web"], "test setup"
+    count = len(reports)
+
+    CONFIG.sensors.tracked = {"aida64": ["CPU"], "lhm-web": ["CPU Package"]}
+    controller.sync_sources()
+
+    assert len(reports) == count + 1, "lhm left the silent set while lhm-web stays silent"
+    assert reports[-1][2] is False
+    assert controller.silent_sources == ["lhm-web"]
+
+
+async def test_an_edit_of_the_tracked_sensors_shows_without_a_tick():
+    """Home drops the rows of an unticked sensor at once, also while the loop is stopped."""
+    controller, _reports, temps = two_sources_one_silent()
+    await controller._tick()
+
+    CONFIG.sensors.tracked = {"aida64": ["CPU", "GPU"]}
+    controller.sync_sources()
+
+    _max, selection = temps[-1]
+    assert [(r.source, r.label, r.value) for r in selection.readings] == [
+        ("aida64", "CPU", 50.0),
+        ("aida64", "GPU", 40.0),
+    ]
+    assert controller.readings == {"aida64": {"CPU": 50.0, "GPU": 40.0}}, "a removed source takes its readings with it"
 
 
 # --- resizing the smoothing window ---------------------------------------------------------------
