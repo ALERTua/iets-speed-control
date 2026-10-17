@@ -33,10 +33,11 @@ Pick one with `sensors.provider` in the config file:
 | `lhm`              | LibreHardwareMonitor via WMI    | Free; falls back to the OpenHardwareMonitor namespace. Not every machine registers the WMI provider |
 | `lhm-web`          | LibreHardwareMonitor web server | Free; works where the WMI provider does not                                                         |
 | `lenovo-wmi`       | Lenovo Legion embedded controller via WMI | Lenovo Legion laptops only; no monitoring app needed, but this app must run as administrator |
+| `nvidia`           | NVIDIA display driver (NVAPI)   | NVIDIA GPUs only; no monitoring app and no administrator rights needed. Reads the GPU only, no CPU temperature |
 
 Sensor labels differ between sources, so each source keeps its own list of filters (`sensors.filters`, see [CONFIG.md](CONFIG.md)). A filter is a regular expression that ignores case. The hottest reading any filter matches drives the curve. A filter that matches nothing is shown in red in Settings → Sensors, and if no filter matches anything the app reads 0 °C, which holds the fan at the curve's floor.
 
-If the source itself stops answering — AIDA64 closed, LibreHardwareMonitor's web server unreachable, or this app not elevated for `lenovo-wmi` — the tray icon turns red and Home says which source went quiet. The fan keeps running on the curve's floor until it comes back.
+If the source itself stops answering — AIDA64 closed, LibreHardwareMonitor's web server unreachable, this app not elevated for `lenovo-wmi`, or the NVIDIA GPU asleep for `nvidia` — the tray icon turns red and Home says which source went quiet. The fan keeps running on the curve's floor until it comes back.
 
 #### AIDA64 Preparation
 
@@ -117,6 +118,16 @@ Invoke-CimMethod -InputObject $m -MethodName GetFeatureValue -Arguments @{ IDs =
 ```
 
 The HWiNFO64 switch in the Lenovo Legion Toolkit settings is not needed for this source. That switch only shares fan speeds and the battery temperature with HWiNFO64.
+
+#### NVIDIA Driver Preparation (`sensors.provider: nvidia`)
+
+Reads the GPU temperatures straight from the NVIDIA display driver, through `nvapi64.dll`, which every NVIDIA driver installs. No monitoring app has to run, and the app needs no administrator rights. It reads the first NVIDIA GPU only, and it reads no CPU temperature, so use it for a GPU-only filter list or wait for a later change that reads several sources at once.
+
+The labels are `GPU Core`, `GPU Hot Spot` and `GPU Memory Junction`, the same as in LibreHardwareMonitor, so the default filter `GPU` matches all of them and the hottest drives the fan. A GPU that has no hot spot or memory junction sensor leaves that label out. An RTX 50 series card has no hot spot.
+
+On a laptop with switchable graphics the NVIDIA GPU powers off when nothing uses it, and reading its temperature would power it on again. So the source asks the driver first whether the GPU is powered and returns no readings while it sleeps. The curve then runs on its floor until a program wakes the GPU. The source logs the sleep and the wake-up at debug level only.
+
+Check what the driver says with `nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader`. That number is the `GPU Core` reading. Hot spot and memory junction come from an NVAPI call that NVIDIA does not document, and they can be wrong or missing on a driver that changes it.
 
 ### Serial Device Preparation
 
