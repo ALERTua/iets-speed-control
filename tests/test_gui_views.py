@@ -103,13 +103,11 @@ def test_top_level_items_are_always_listed(rail):
     assert "settings" in packed(rail)
 
 
-def test_sub_items_appear_only_under_the_active_parent(rail):
-    rail.select("home")
-    assert packed(rail) == ["home", "settings"], "sub-items must stay hidden under another parent"
-
-    rail.select("settings")
-    assert "settings:curve" in packed(rail)
-    assert "settings:display" in packed(rail)
+def test_sub_items_are_listed_whichever_destination_is_active(rail):
+    """Every Settings section stays one click away, from Home too."""
+    for key in ("home", "settings"):
+        rail.select(key)
+        assert packed(rail) == ["home", "settings", "settings:curve", "settings:display"], key
 
 
 def test_selecting_a_sub_item_keeps_its_siblings_visible(rail):

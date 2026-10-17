@@ -2,8 +2,8 @@
 
 This is the current desktop convention: Material 3 Expressive deprecated the navigation drawer in
 favour of a rail with collapsed and expanded configurations, pinned to the leading edge and always
-visible. Sub-items are indented under their parent and only shown while expanded, since a collapsed
-rail has no room for labels.
+visible. Sub-items are indented under their parent and shown whenever the rail is expanded, whichever
+destination is active, so every section is one click away. A collapsed rail has no room for their labels.
 """
 
 import customtkinter as ctk
@@ -89,23 +89,11 @@ class NavigationRail(ctk.CTkFrame):
         if self.on_exit:
             self.on_exit()
 
-    def _item(self, key) -> NavItem:
-        return next(item for item in self.items if item.key == key)
-
     # --- layout ---------------------------------------------------------------------------
 
     def _visible_items(self) -> list[NavItem]:
-        """Top-level items always; sub-items only when expanded and their parent is active."""
-        active_parent = None
-        if self.selected is not None:
-            item = self._item(self.selected)
-            active_parent = item.parent or item.key
-
-        visible = []
-        for item in self.items:
-            if item.parent is None or (not self.collapsed and item.parent == active_parent):
-                visible.append(item)
-        return visible
+        """Top-level items always; sub-items whenever the rail is expanded."""
+        return [item for item in self.items if item.parent is None or not self.collapsed]
 
     def _relayout(self):
         for button in self.buttons.values():
