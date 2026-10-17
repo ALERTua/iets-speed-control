@@ -1,4 +1,4 @@
-"""The Home destination: connection state, the maximum and the fan, each filter's reading, history, mode.
+"""The Home destination: connection state, the maximum and the fan, each tracked sensor, history, mode.
 
 Speed control and the fan curve live in the Settings destination; navigation between the two is the
 rail's job, so nothing here opens another view.
@@ -15,10 +15,11 @@ import queue
 import customtkinter as ctk
 
 from ..controller import Mode, SpeedController
-from ..sensors import lacks_admin_rights
-from .filter_readings import FilterReadings
+from ..util.config import CONFIG
+from ..util.tracking import Selection, SourceState
 from .history import TemperatureHistory
 from .theme import ACCENT_COLOR, CARD, FAN_COLOR, HISTORY_WINDOW_SECONDS, MAX_COLOR, MUTED, UI_POLL_MS
+from .tracked_readings import TrackedReadings, source_label
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,10 @@ class StatusPanel(ctk.CTkFrame):
 
         self._updates: queue.Queue[tuple[str, tuple]] = queue.Queue()
         self._polling = True
+        # The latest (max_temp, selection) of the loop, kept to redraw when tracking stops or resumes
+        # between two ticks: with the device unplugged the loop reads nothing and reports nothing.
+        self._temps: tuple[int, Selection] | None = None
+        self._monitoring: bool | None = None
 
         self._build_ui()
         self.controller.set_callbacks(
@@ -54,6 +59,7 @@ class StatusPanel(ctk.CTkFrame):
         numbers = ctk.CTkFrame(self, fg_color=CARD, corner_radius=8)
         numbers.pack(fill="x", padx=14, pady=6)
         self.value_labels = {}
+        cells = {}
         for name, colour in (("Max", MAX_COLOR), ("Fan", FAN_COLOR)):
             cell = ctk.CTkFrame(numbers, fg_color="transparent")
             cell.pack(side="left", expand=True, pady=10)
@@ -61,10 +67,13 @@ class StatusPanel(ctk.CTkFrame):
             value = ctk.CTkLabel(cell, text="--", font=("", 20, "bold"), text_color=colour)
             value.pack()
             self.value_labels[name] = value
+            cells[name] = cell
+        # Packed only while no tracked sensor has a reading, to say why the fan ignores the curve.
+        self.max_note = ctk.CTkLabel(cells["Max"], text="", font=("", 10), text_color=MUTED)
 
-        # Every filter of the active source with its reading; the one that gives the maximum is marked.
-        self.filter_readings = FilterReadings(self, fg_color=CARD, corner_radius=8)
-        self.filter_readings.pack(fill="x", padx=14, pady=(0, 6), ipady=4)
+        # Every tracked sensor with its reading; the one that gives the maximum is marked.
+        self.tracked_readings = TrackedReadings(self, fg_color=CARD, corner_radius=8)
+        self.tracked_readings.pack(fill="x", padx=14, pady=(0, 6), ipady=4)
 
         # The graph takes whatever room is left: a ten-minute span needs the width and height.
         self.history = TemperatureHistory(self, window_seconds=HISTORY_WINDOW_SECONDS, height=220)
@@ -94,16 +103,18 @@ class StatusPanel(ctk.CTkFrame):
             pass
 
         # Every reading matters for the graph, but only the last one for the labels -- and one redraw
-        # is enough for the whole batch, however many readings the drain picked up.
-        for max_temp, _selection in temps:
-            self.history.add(max_temp)
-        if temps:
+        # is enough for the whole batch, however many readings the drain picked up. Without a reading
+        # the controller keeps its last maximum, which would draw a flat line of a stale temperature.
+        if temps and self._has_reading():
+            for max_temp, _selection in temps:
+                self.history.add(max_temp)
             self.history.redraw()
 
-        if "temps" in latest:
-            max_temp, selection = latest["temps"]
-            self.value_labels["Max"].configure(text=f"{max_temp} °C")
-            self.filter_readings.show(selection)
+        monitoring = self.controller.monitoring
+        if "temps" in latest or monitoring != self._monitoring:
+            self._temps = latest.get("temps", self._temps)
+            self._monitoring = monitoring
+            self._show_temps()
         if "speed" in latest:
             self.value_labels["Fan"].configure(text=f"{latest['speed'][0]} %")
         if "status" in latest:
@@ -117,20 +128,46 @@ class StatusPanel(ctk.CTkFrame):
 
     # --- widget updates -------------------------------------------------------------------
 
+    def _has_reading(self) -> bool:
+        return self.controller.monitoring and not self.controller.fallback
+
+    def _show_temps(self):
+        """The Max cell and the list, from the latest tick and from whether anything is tracked now."""
+        if not self.controller.monitoring:
+            self._show_max("--", None)
+            self.tracked_readings.show_stopped()
+            return
+
+        if self._temps is None:
+            return  # nothing read yet: the placeholders stay
+
+        max_temp, selection = self._temps
+        if self.controller.fallback:
+            self._show_max("--", f"No reading: fan at default {CONFIG.control.default_speed} %")
+        else:
+            self._show_max(f"{max_temp} °C", None)
+        self.tracked_readings.show(selection, self.controller.source_states)
+
+    def _show_max(self, text: str, note: str | None):
+        self.value_labels["Max"].configure(text=text)
+        if note:
+            self.max_note.configure(text=note)
+            if not self.max_note.winfo_manager():
+                self.max_note.pack()
+        elif self.max_note.winfo_manager():
+            self.max_note.pack_forget()
+
     def _apply_status(self, connected: bool, running: bool, sensors_ok: bool = True, loop_ok: bool = True):
         """Two things can be wrong, and the difference matters when you are fixing it.
 
         A dead serial link leaves the fan wherever it was; a silent temperature source is worse,
-        because the loop keeps running and drives the fan from 0 °C -- the curve's floor.
+        because the loop keeps running on the remaining sources, or on the default speed without any.
         """
         if not connected:
             text = "● Disconnected"
             colour = DISCONNECTED_COLOR
         elif not sensors_ok:
-            source = getattr(self.controller.sensors, "name", "the sensor source")
-            text = f"● No temperatures from {source}"
-            if lacks_admin_rights(self.controller.sensors):
-                text += ": restart as administrator"
+            text = f"● {self._silence_reason()}"
             colour = DISCONNECTED_COLOR
         elif not loop_ok:
             # The link and the source work, but ticks raise: the fan is not being driven.
@@ -146,6 +183,18 @@ class StatusPanel(ctk.CTkFrame):
 
         if self.gui_app:
             self.gui_app.update_tray_icon(connected and sensors_ok and loop_ok)
+
+    def _silence_reason(self) -> str:
+        """Name each source that gave nothing, and the fix where there is one."""
+        states = self.controller.source_states
+        reasons = [
+            f"{source_label(name)}: restart as administrator"
+            if states.get(name) is SourceState.NEEDS_ADMIN
+            else f"No temperatures from {source_label(name)}"
+            for name in self.controller.silent_sources
+        ]
+        # The status arrives a moment after the tick that set it, so the source may have recovered since.
+        return " · ".join(reasons) or "No temperatures from a tracked source"
 
     def _on_mode_change(self, value):
         # The manual speed is whatever the user last set, kept in the configuration between runs.

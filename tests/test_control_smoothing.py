@@ -7,8 +7,9 @@ scripted rather than whatever the machine happens to be doing.
 import asyncio
 
 import pytest
+from conftest import controller_tracking
 
-from iets_speed_control.controller import Mode, SpeedController
+from iets_speed_control.controller import Mode
 from iets_speed_control.util.config import CONFIG
 from iets_speed_control.util.tools import MedianSmoother
 
@@ -122,7 +123,7 @@ async def test_dimmer_is_not_re_read_every_tick(controller_env, monkeypatch):
     monkeypatch.setattr(CONFIG.control, "resync_every", 0)
     monkeypatch.setattr(CONFIG.control, "temp_window", 1)
 
-    controller = SpeedController(sensor_provider=ScriptedSensors([70]))
+    controller = controller_tracking(ScriptedSensors([70]))
     device = FakeDevice(0)
     controller.device = device
 
@@ -135,7 +136,7 @@ async def test_dimmer_is_re_read_on_the_resync_tick(controller_env, monkeypatch)
     monkeypatch.setattr(CONFIG.control, "resync_every", 3)
     monkeypatch.setattr(CONFIG.control, "temp_window", 1)
 
-    controller = SpeedController(sensor_provider=ScriptedSensors([70]))
+    controller = controller_tracking(ScriptedSensors([70]))
     device = FakeDevice(0)
     controller.device = device
 
@@ -150,7 +151,7 @@ async def test_external_change_is_picked_up_and_reported(controller_env, monkeyp
     monkeypatch.setattr(CONFIG.control, "temp_window", 1)
     monkeypatch.setattr(CONFIG.control, "max_step", 0)
 
-    controller = SpeedController(sensor_provider=ScriptedSensors([70]))
+    controller = controller_tracking(ScriptedSensors([70]))
     device = FakeDevice(0)
     controller.device = device
     controller.mode = Mode.MANUAL
@@ -169,7 +170,7 @@ async def test_reconnect_forces_a_fresh_read(controller_env, monkeypatch):
     monkeypatch.setattr(CONFIG.control, "resync_every", 0)
     monkeypatch.setattr(CONFIG.control, "temp_window", 1)
 
-    controller = SpeedController(sensor_provider=ScriptedSensors([70]))
+    controller = controller_tracking(ScriptedSensors([70]))
     device = FakeDevice(0)
     controller.device = device
 
@@ -194,7 +195,7 @@ async def test_a_single_spike_does_not_move_the_fan(controller_env, monkeypatch)
     monkeypatch.setattr(CONFIG.control, "resync_every", 0)
     monkeypatch.setattr(CONFIG.control, "temp_window", 5)
 
-    controller = SpeedController(sensor_provider=ScriptedSensors([60, 60, 60, 60, 60, 95, 60, 60, 60]))
+    controller = controller_tracking(ScriptedSensors([60, 60, 60, 60, 60, 95, 60, 60, 60]))
     device = FakeDevice(30)
     controller.device = device
 
@@ -208,7 +209,7 @@ async def test_fractional_readings_are_rounded_not_truncated(controller_env, mon
     monkeypatch.setattr(CONFIG.control, "resync_every", 0)
     monkeypatch.setattr(CONFIG.control, "temp_window", 1)
 
-    controller = SpeedController(sensor_provider=ScriptedSensors([60.6]))
+    controller = controller_tracking(ScriptedSensors([60.6]))
     controller.device = FakeDevice(0)
 
     await run_loop(controller, ticks=3)

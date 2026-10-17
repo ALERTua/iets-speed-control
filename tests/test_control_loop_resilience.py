@@ -14,10 +14,10 @@ import logging
 import threading
 
 import pytest
+from conftest import controller_tracking
 from test_control_smoothing import FakeDevice, ScriptedSensors
 
 from iets_speed_control import controller as controller_module
-from iets_speed_control.controller import SpeedController
 from iets_speed_control.util.config import CONFIG
 
 
@@ -97,7 +97,7 @@ async def wait_until(predicate, describe=None, timeout=5.0):
 
 
 def make_controller(device, sensors=None):
-    controller = SpeedController(sensor_provider=sensors or ScriptedSensors([90]))
+    controller = controller_tracking(sensors or ScriptedSensors([90]))
     controller.device = device
     return controller
 

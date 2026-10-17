@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from ..controller import SpeedController
+from ..util.config import CONFIG
 from ..util.logger import configure_logging
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,14 @@ async def _cli():
     def on_status(connected, *_rest):
         nonlocal initial
         if initial and connected:
-            logger.info(f"Starting with max {controller.max_temp} °C. Fan: {controller.current_speed}")
+            if controller.monitoring:
+                logger.info(f"Starting with max {controller.max_temp} °C. Fan: {controller.current_speed}")
+            else:
+                # max_temp would read 0 °C, which says nothing: no temperature is being watched.
+                logger.info(
+                    f"No sensor is tracked, so the fan runs at {CONFIG.control.default_speed} %. "
+                    "Track sensors under sensors.tracked in the configuration file or in the GUI's Settings."
+                )
             initial = False
         elif not connected:
             logger.info(f"No device connected. Max: {controller.max_temp} °C")
@@ -37,7 +45,7 @@ async def _cli():
                 await asyncio.sleep(9)  # Additional wait (total 10s)
 
     except asyncio.CancelledError:
-        logger.info("Setting fan to 0")
+        logger.info(f"Setting fan to the default speed, {CONFIG.control.default_speed} %")
         await controller.shutdown()
 
 

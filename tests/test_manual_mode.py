@@ -6,9 +6,10 @@ Uses the fake device from the smoothing tests, so the real fan is never driven.
 import asyncio
 
 import pytest
+from conftest import controller_tracking
 from test_control_smoothing import FakeDevice, ScriptedSensors
 
-from iets_speed_control.controller import Mode, SpeedController
+from iets_speed_control.controller import Mode
 from iets_speed_control.util.config import CONFIG
 
 ctk = pytest.importorskip("customtkinter")
@@ -25,7 +26,7 @@ def fast_loop(monkeypatch):
 
 
 async def test_manual_speed_is_written_to_the_device(fast_loop):
-    controller = SpeedController(sensor_provider=ScriptedSensors([60]))
+    controller = controller_tracking(ScriptedSensors([60]))
     controller.device = FakeDevice(0)
     controller.mode = Mode.MANUAL
     controller.manual_speed = 42
@@ -38,7 +39,7 @@ async def test_manual_speed_is_written_to_the_device(fast_loop):
 
 
 async def test_moving_the_slider_mid_run_changes_what_is_sent(fast_loop):
-    controller = SpeedController(sensor_provider=ScriptedSensors([60]))
+    controller = controller_tracking(ScriptedSensors([60]))
     controller.device = FakeDevice(0)
     controller.mode = Mode.MANUAL
     controller.manual_speed = 20
@@ -58,7 +59,7 @@ async def test_manual_mode_ignores_the_temperature(fast_loop, monkeypatch):
     """A hot chip must not override an explicit manual setting; that is what manual means."""
     monkeypatch.setattr(CONFIG.control, "curve", [[0, 0], [100, 100]])
 
-    controller = SpeedController(sensor_provider=ScriptedSensors([95]))
+    controller = controller_tracking(ScriptedSensors([95]))
     controller.device = FakeDevice(0)
     controller.mode = Mode.MANUAL
     controller.manual_speed = 10
@@ -66,17 +67,35 @@ async def test_manual_mode_ignores_the_temperature(fast_loop, monkeypatch):
     await controller.start()
     await asyncio.sleep(0.08)
     running = list(controller.device.writes)
-    await controller.stop()  # stopping parks the fan at 0, which is not part of what manual sent
+    await controller.stop()  # stopping sets the default speed, which is not part of what manual sent
 
     assert set(running) <= {10}, f"the curve leaked into manual mode: {running}"
     assert running, "manual mode sent nothing at all"
+
+
+async def test_manual_mode_ignores_the_default_speed_while_running(fast_loop, monkeypatch):
+    """The default speed is for when there is nothing to go on; a chosen manual speed is never replaced by it."""
+    monkeypatch.setattr(CONFIG.control, "default_speed", 77)
+
+    # Nothing is tracked, which is exactly when Auto mode would run the fan at the default speed.
+    controller = controller_tracking(ScriptedSensors([60]), labels=())
+    controller.device = FakeDevice(0)
+    controller.mode = Mode.MANUAL
+    controller.manual_speed = 12
+
+    await controller.start()
+    await asyncio.sleep(0.08)
+    running = list(controller.device.writes)
+    await controller.stop()
+
+    assert running and set(running) == {12}, f"the default speed leaked into manual mode: {running}"
 
 
 async def test_the_ramp_down_limit_does_not_apply_to_manual(fast_loop, monkeypatch):
     """max_step protects an automatic ramp-down; an explicit manual value is obeyed at once."""
     monkeypatch.setattr(CONFIG.control, "max_step", 3)
 
-    controller = SpeedController(sensor_provider=ScriptedSensors([60]))
+    controller = controller_tracking(ScriptedSensors([60]))
     controller.device = FakeDevice(90)
     controller.mode = Mode.MANUAL
     controller.manual_speed = 10
@@ -92,7 +111,7 @@ async def test_hysteresis_does_not_apply_to_manual(fast_loop, monkeypatch):
     """A small deliberate nudge must still take effect."""
     monkeypatch.setattr(CONFIG.control, "ignore_less_than", 20)
 
-    controller = SpeedController(sensor_provider=ScriptedSensors([60]))
+    controller = controller_tracking(ScriptedSensors([60]))
     controller.device = FakeDevice(50)
     controller.mode = Mode.MANUAL
     controller.manual_speed = 52
@@ -117,11 +136,11 @@ def test_the_configured_modes_match_the_controller_enum():
 def test_the_mode_is_read_from_the_configuration(monkeypatch):
     monkeypatch.setattr(CONFIG.control, "mode", "manual")
 
-    assert SpeedController(sensor_provider=ScriptedSensors([60])).mode is Mode.MANUAL
+    assert controller_tracking(ScriptedSensors([60])).mode is Mode.MANUAL
 
 
 def test_changing_the_mode_updates_the_configuration():
-    controller = SpeedController(sensor_provider=ScriptedSensors([60]))
+    controller = controller_tracking(ScriptedSensors([60]))
 
     controller.mode = Mode.MANUAL
 
@@ -151,11 +170,11 @@ def test_the_manual_speed_is_read_from_the_configuration(monkeypatch):
     """A fresh run must resume where the last one left off instead of at 0 %."""
     monkeypatch.setattr(CONFIG.control, "manual_speed", 58)
 
-    assert SpeedController(sensor_provider=ScriptedSensors([60])).manual_speed == 58
+    assert controller_tracking(ScriptedSensors([60])).manual_speed == 58
 
 
 def test_setting_the_manual_speed_updates_the_configuration():
-    controller = SpeedController(sensor_provider=ScriptedSensors([60]))
+    controller = controller_tracking(ScriptedSensors([60]))
 
     controller.manual_speed = 47
 
@@ -163,7 +182,7 @@ def test_setting_the_manual_speed_updates_the_configuration():
 
 
 def test_a_clamped_manual_speed_is_what_gets_stored():
-    controller = SpeedController(sensor_provider=ScriptedSensors([60]))
+    controller = controller_tracking(ScriptedSensors([60]))
 
     controller.manual_speed = 150
 
@@ -186,7 +205,7 @@ def test_a_manual_speed_outside_the_range_is_rejected():
     config = cfg.defaults()
     config.control.manual_speed = 120
 
-    with pytest.raises(cfg.ConfigError, match="control.manual_speed must be within 0-100"):
+    with pytest.raises(cfg.ConfigError, match="control.manual_speed must be a whole number within 0-100"):
         cfg.validate(config)
 
 

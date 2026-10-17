@@ -1,6 +1,6 @@
 # IETS Speed Control — notes for agents
 
-Controls the PWM of a 12 V IETS laptop cooler stand over a serial link to a Tasmota microcontroller, driven by the hottest Windows temperature that the active source's filters select. Windows only. Python 3.14 (`requires-python = "==3.14.*"`).
+Controls the PWM of a 12 V IETS laptop cooler stand over a serial link to a Tasmota microcontroller, driven by the hottest Windows temperature among the sensors the user tracks, from any number of sources. Windows only. Python 3.14 (`requires-python = "==3.14.*"`).
 
 **Use `uv` for everything.** `uv run <cmd>`, `uv add`, `uv sync --dev`. Never call `pip` or a bare `python`. Task shortcuts live in the `Justfile` (`just gui`, `just cli`, `just test`, `just test-fast`, `just test-e2e`, `just pre`, `just lint`).
 
@@ -8,17 +8,17 @@ Controls the PWM of a 12 V IETS laptop cooler stand over a serial link to a Tasm
 
 | Path | What lives there |
 | --- | --- |
-| `controller.py` | `SpeedController`: the async control loop, mode, curve, smoothing, reconnect |
+| `controller.py` | `SpeedController`: the async control loop, mode, curve, smoothing, reconnect; `read_source` reads one source and says how it answered |
 | `entities/fan.py` | `FanDevice`, what the controller needs from any fan: connect, `read_speed`, `set_speed` |
 | `entities/tasmota_fan.py` | `TasmotaSerialFan`, the one implementation: Tasmota console on a serial port, finds a moved port |
 | `entities/serial_device.py` | async serial I/O under it |
-| `sensors/` | one module per temperature source, behind the `SensorProvider` protocol; `base.py` has `is_live_temperature` and `lacks_admin_rights` |
+| `sensors/` | one module per temperature source, behind the `SensorProvider` protocol; `base.py` has `is_live_temperature`, `is_plausible` and `plausible`, and `lacks_admin_rights` |
 | `util/config.py` | the whole configuration layer; `CONFIG` is the live object |
 | `util/logger.py` | `configure_logging`, `reconfigure`; the only owner of global logging state |
 | `util/tools.py` | `MedianSmoother`, `curve_to_ranges`, `calculate_dimmer_value` |
-| `util/filters.py` | the filter list: `select` picks the hottest reading the filters match |
-| `util/source_names.py` | the aliases `sensors.provider` accepts; outside `sensors/` so the configuration can import it without a cycle |
-| `gui/` | `app` (shell + tray), `status` (Home), `settings`, `filter_list`, `filter_readings`, `curve_editor`, `history`, `nav`, `theme` |
+| `util/tracking.py` | `SourceState`, `SensorReading`, `Selection`; `select` picks the hottest tracked reading across sources |
+| `util/source_names.py` | `SOURCE_NAMES` and the aliases `sensors.tracked` accepts; outside `sensors/` so the configuration can import it without a cycle |
+| `gui/` | `app` (shell + tray), `status` (Home), `settings`, `sensor_picker`, `tracked_readings`, `curve_editor`, `history`, `nav`, `theme` |
 | `entrypoints/` | `cli.py` and `gui.pyw`; the only place allowed to configure logging |
 
 ## Configuration
@@ -32,13 +32,14 @@ One YAML file at `%USERPROFILE%\.iets-speed-control\config.yaml` (`DEFAULT_CONFI
   under-cooling the machine is worse than refusing to start.
 - Every key is editable in the GUI. Rows address keys by dotted path and validate on a throwaway copy
   (`with_value`), so a value the app could not start with never reaches `CONFIG`.
-- `sensors.filters` maps a source's code name to its own list of case-insensitive regular expressions; a source without an entry uses `[CPU, GPU]`. The curve follows the hottest reading any filter matches. The old `cpu_filter` / `gpu_filter` are read once, escaped, into the list of the source named by `canonical_source(sensors.provider)`.
+- `sensors.tracked` maps a source's code name to the exact labels tracked from it, and the controller reads exactly those sources, all at once. The curve follows the hottest tracked reading. Empty means nothing is monitored and the fan runs at `control.default_speed`, which also is what `stop()` and `shutdown()` leave. The old `sensors.provider`, `sensors.filters`, `cpu_filter` and `gpu_filter` are gone with no migration: a load ignores them with the unknown-key warning and the next save drops them.
 
 ## Adding a sensor source
 
-- Implement `get_temperatures() -> dict[str, float]`. It is blocking by contract (the loop calls it through `asyncio.to_thread`), returns `{}` when the source is unavailable rather than raising, and returns live readings only: drop limits and margins with `is_live_temperature`.
+- Implement `get_temperatures() -> dict[str, float]`. It is blocking by contract (the loop calls it through `asyncio.to_thread`), returns `{}` when the source is unavailable rather than raising, and returns live readings only: drop limits and margins with `is_live_temperature`. The controller also drops what `is_plausible` refuses (0 °C or below, above 150 °C).
 - Give the class a `name` (the code name in `config.yaml`) and a `label` (what the Settings menu shows). A source that only works elevated sets `requires_admin = True`; Home and Settings then say so.
-- Register it in `PROVIDERS` in `sensors/__init__.py`; add any extra spellings to `util/source_names.py`.
+- Register it in `PROVIDERS` in `sensors/__init__.py`; add its code name to `SOURCE_NAMES` and any extra spellings to `ALIASES` in `util/source_names.py`. A test fails when `SOURCE_NAMES` and `PROVIDERS` differ.
+- An empty answer is read as silent. A source whose hardware can be powered off sets `asleep = True` while it is, so an empty answer then counts as asleep, not broken.
 - Add a raw probe to `PROBES` and a line to `SOURCE_HINTS` in `tests/conftest.py`, so the e2e tests compare against an independent answer and explain a skip.
 - Labels should be descriptive and unique: `lhm_web` builds `"<hardware>/<sensor>"` because bare sensor names are neither.
 
@@ -69,6 +70,8 @@ One YAML file at `%USERPROFILE%\.iets-speed-control\config.yaml` (`DEFAULT_CONFI
 `just test` runs everything serially, the way pre-commit and CI do (~16 s). `just test-fast` runs
 everything that needs no Tk root in parallel (~2 s) — the loop to use while editing non-GUI code.
 `just test-e2e` needs AIDA64 or LibreHardwareMonitor actually running.
+
+- **A controller test must track something.** The controller reads exactly the sources of `CONFIG.sensors.tracked`, so a scripted source is never read unless the test sets it. `controller_tracking(provider, source, labels)` in `tests/conftest.py` does both. Name the source by a real code name (`aida64`, `lhm`, `lhm-web`, `lenovo-wmi`, `nvidia`): `sync_sources` creates any name that was not given.
 
 - **The suite never opens the developer's `config.yaml`.** `tests/conftest.py` sets `IETS_SPEED_CONTROL_CONFIG` to a throwaway folder before its first import of the package, so a broken file cannot stop the suite and a `save()` without a path cannot overwrite the real one. Only the `lhm-web` e2e tests read the developer's file, and only its `sensors.lhm_web` section.
 

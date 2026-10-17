@@ -97,7 +97,7 @@ def tk_root():
 
 
 class FakeProvider:
-    """A sensor source with known labels, so filter feedback has something predictable to find."""
+    """A sensor source with known labels, so a test has something predictable to read."""
 
     name = "fake"
 
@@ -106,6 +106,18 @@ class FakeProvider:
 
     def get_temperatures(self):
         return dict(self.readings)
+
+
+def controller_tracking(provider, source: str = "aida64", labels=("CPU Package",)):
+    """A SpeedController that reads `provider` as the source `source` and tracks `labels` of it.
+
+    The controller reads exactly the sources of sensors.tracked, so a test has to track something for a
+    scripted provider to be read at all. clean_config puts the tracked set back after the test.
+    """
+    from iets_speed_control.controller import SpeedController
+
+    CONFIG.sensors.tracked = {source: list(labels)}
+    return SpeedController(sources={source: provider})
 
 
 @pytest.fixture(scope="module")
@@ -119,7 +131,8 @@ def settings_view(tk_root):
     from iets_speed_control.controller import SpeedController
     from iets_speed_control.gui.settings import SettingsView
 
-    controller = SpeedController(sensor_provider=FakeProvider())
+    # A stand-in for every source, so no test that tracks one through this panel reaches WMI, NVAPI or HTTP.
+    controller = SpeedController(sources={name: FakeProvider() for name in PROVIDERS})
     widget = SettingsView(tk_root, controller)
     widget.pack(fill="both", expand=True)
     tk_root.update()
@@ -144,7 +157,7 @@ def reset_settings_view(view):
     controller.mode = Mode.AUTO
     controller.manual_speed = CONFIG.control.manual_speed
     controller._current_speed = 0
-    controller.sensors = FakeProvider()
+    controller.sync_sources()  # clean_config has put the tracked set back
     controller.temp_window = CONFIG.control.temp_window
     controller.curve = CONFIG.control.curve
 
@@ -160,7 +173,6 @@ def reset_settings_view(view):
     view._initial_curve = controller.curve
     view._apply_lhm_visibility()
     view._apply_admin_note()
-    view._show_filter_error(None)
     view.connection_label.configure(text="")
     view.history_window = HISTORY_WINDOW_SECONDS
     view.sync_mode()

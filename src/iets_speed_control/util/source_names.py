@@ -1,9 +1,11 @@
-"""The other spellings sensors.provider accepts, and the code name each one means.
+"""The code names of the sources, and the other spellings sensors.tracked accepts for them.
 
 Kept apart from the sensors package on purpose: the configuration needs it while it loads, and the
 sensors package imports the configuration, so taking it from there would be an import cycle. A test
-checks that every alias here points at a registered source.
+checks that these names are exactly the registered sources, and that every alias points at one.
 """
+
+SOURCE_NAMES = ("aida64", "lhm", "lhm-web", "lenovo-wmi", "nvidia")
 
 ALIASES = {
     "aida": "aida64",

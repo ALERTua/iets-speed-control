@@ -15,6 +15,10 @@ _com_state = threading.local()
 # Matched as substrings, so plural or compound forms ("Limits") go too.
 NOT_LIVE = re.compile("distance to tjmax|limit|resolution|warning temperature|critical temperature", re.IGNORECASE)
 
+# The bounds of a plausible reading in °C: above the lower one, and up to the upper one.
+MIN_PLAUSIBLE = 0.0
+MAX_PLAUSIBLE = 150.0
+
 
 class SensorProvider(Protocol):
     """A source of temperature readings.
@@ -67,6 +71,22 @@ def is_live_temperature(label: object) -> bool:
     rather than allowed to raise out of the whole poll.
     """
     return not NOT_LIVE.search(label if isinstance(label, str) else "")
+
+
+def is_plausible(label: object, value: object) -> bool:
+    """Whether a reading is a live temperature a chip can really have.
+
+    0 °C is how several sources report a sensor they lack, and a value past 150 °C is a broken reading,
+    not a chip that is still running. Lenovo Legion Toolkit keeps its readings within the same bounds.
+    """
+    if not is_live_temperature(label) or isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return MIN_PLAUSIBLE < value <= MAX_PLAUSIBLE
+
+
+def plausible(readings: dict[str, float]) -> dict[str, float]:
+    """The readings `is_plausible` accepts, in their order."""
+    return {label: value for label, value in readings.items() if is_plausible(label, value)}
 
 
 def to_temperature(value) -> float | None:

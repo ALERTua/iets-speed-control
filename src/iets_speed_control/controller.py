@@ -3,15 +3,16 @@
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import Enum
 
 from .entities.fan import FanDevice
 from .entities.tasmota_fan import create_fan
-from .sensors import SensorProvider, create_provider
-from .util.config import CONFIG, filters_for
-from .util.filters import Selection, select
+from .sensors import SensorProvider, create_provider, lacks_admin_rights
+from .sensors.base import plausible
+from .util.config import CONFIG
 from .util.tools import MedianSmoother, calculate_dimmer_value, curve_to_ranges
+from .util.tracking import Selection, SourceState, select, tracked_count
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +37,16 @@ class SpeedController:
     """
     Manages fan speed control with auto and manual modes.
 
-    In AUTO mode, fan speed follows the hottest reading the source's filters match.
+    In AUTO mode, fan speed follows the hottest tracked sensor, from whichever sources they come from,
+    and falls back to control.default_speed when none of them has a reading.
     In MANUAL mode, fan speed is set directly by the user.
     """
 
-    def __init__(self, sensor_provider: SensorProvider | None = None):
+    def __init__(self, sources: Mapping[str, SensorProvider] | None = None):
+        """`sources` stands in for the sources of those code names instead of creating them; tests use it."""
         self.device: FanDevice = create_fan()
-        self._sensors = sensor_provider or create_provider(CONFIG.sensors.provider)
+        self._given_sources = dict(sources or {})
+        self._sources: dict[str, SensorProvider] = {}
         self._mode = Mode(CONFIG.control.mode)  # validated on load, so this cannot raise here
         self._manual_speed = CONFIG.control.manual_speed
         self._running = False
@@ -54,13 +58,18 @@ class SpeedController:
         self._on_speed_change: Callable | None = None
 
         # Current status
-        # The smoothed maximum drives the curve; the selection says which filter and sensor gave it.
+        # The smoothed maximum drives the curve; the selection says which tracked sensor gave it.
         self._max_temp = 0
         self._selection = Selection()
+        # The latest plausible readings and the state of each source, both replaced whole every tick.
+        self._readings: dict[str, dict[str, float]] = {}
+        self._source_states: dict[str, SourceState] = {}
+        # Whether the last tick had nothing to go on, so the fan ran at control.default_speed.
+        self._fallback = False
         self._current_speed = 0
         self._connected = False
-        # Whether the temperature source answered at all. A provider that cannot reach its app
-        # returns no readings rather than raising, which would otherwise look like a cold machine.
+        # Whether every tracked source answered. A provider that cannot reach its app returns no readings
+        # rather than raising, which would otherwise look like a cold machine.
         self._sensors_ok = True
         # Whether the previous tick raised, so a lasting fault is reported once rather than every tick.
         self._tick_failing = False
@@ -77,6 +86,7 @@ class SpeedController:
 
         self._temp_window = max(1, int(CONFIG.control.temp_window))
         self._smoother = MedianSmoother(self._temp_window)
+        self.sync_sources()
 
         # The curve is editable at runtime from the GUI. Configuration only seeds it.
         self._curve = [(float(temperature), float(percent)) for temperature, percent in CONFIG.control.curve]
@@ -121,30 +131,55 @@ class SpeedController:
 
     @property
     def sensors_ok(self) -> bool:
-        """Whether the last read got any temperatures out of the source."""
+        """Whether every tracked source answered its last read. A sleeping GPU counts as answering."""
         return self._sensors_ok
 
     def _set_sensors_ok(self, value: bool):
-        """Record whether the source answered, announcing only the transitions."""
+        """Record whether the sources answered, announcing only the transitions."""
         if value == self._sensors_ok:
             return
 
         self._sensors_ok = value
-        name = getattr(self.sensors, "name", type(self.sensors).__name__)
         if value:
-            logger.info(f"Temperature source {name} is answering again")
+            logger.info("Every temperature source is answering again")
         else:
-            logger.error(f"No temperatures from {name}: the fan is running on the curve's floor")
+            logger.error(f"No temperatures from {', '.join(self.silent_sources)}")
         self._notify_status()
 
     @property
+    def silent_sources(self) -> list[str]:
+        """The tracked sources that gave nothing on the last read, for a reason other than sleep."""
+        silent = (SourceState.SILENT, SourceState.NEEDS_ADMIN)
+        return [name for name, state in self._source_states.items() if state in silent]
+
+    @property
+    def source_states(self) -> dict[str, SourceState]:
+        """How each source answered its last read."""
+        return dict(self._source_states)
+
+    @property
+    def readings(self) -> dict[str, dict[str, float]]:
+        """The latest plausible readings of each source, tracked or not."""
+        return self._readings
+
+    @property
+    def monitoring(self) -> bool:
+        """Whether any sensor is tracked at all. Without one the fan runs at control.default_speed."""
+        return tracked_count(CONFIG.sensors.tracked) > 0
+
+    @property
+    def fallback(self) -> bool:
+        """Whether the last tick had no reading to go on, so Auto mode ran the fan at control.default_speed."""
+        return self._fallback
+
+    @property
     def max_temp(self) -> int:
-        """The smoothed hottest reading the filters match: what the curve is evaluated at."""
+        """The smoothed hottest tracked reading: what the curve is evaluated at."""
         return self._max_temp
 
     @property
     def selection(self) -> Selection:
-        """Every filter's latest raw match, and which one holds the maximum."""
+        """Every tracked sensor's latest raw value, and which one holds the maximum."""
         return self._selection
 
     @property
@@ -174,26 +209,31 @@ class SpeedController:
         logger.debug(f"Curve replaced: {ordered}")
 
     @property
-    def sensors(self) -> SensorProvider:
-        """The temperature source in use."""
-        return self._sensors
+    def sources(self) -> dict[str, SensorProvider]:
+        """The sources being read, by code name: every source in sensors.tracked."""
+        return dict(self._sources)
 
-    @sensors.setter
-    def sensors(self, provider):
-        """Swap the temperature source, by name or by instance.
+    def sync_sources(self):
+        """Read the sources sensors.tracked names now, keeping each one that stays.
 
-        Labels differ between sources, so readings taken through the old one say nothing about the
-        new one: the smoothers start over. Published with a single assignment, because the control
-        loop reads this attribute from the asyncio thread while the GUI writes it from Tk.
+        A source keeps its instance, so its own state (a logged warning, a found GPU) survives an edit.
+        Published with a single assignment, because the control loop reads it from the asyncio thread
+        while the GUI calls this from Tk. Unknown names never get here: the configuration rejects them.
         """
-        provider = create_provider(provider) if isinstance(provider, str) else provider
-        if provider is self._sensors:
+        wanted = list(CONFIG.sensors.tracked)
+        if wanted == list(self._sources):
             return
 
-        self._sensors = provider
+        current = self._sources
+        self._sources = {
+            name: current.get(name) or self._given_sources.get(name) or create_provider(name) for name in wanted
+        }
+        # What the old set read says nothing about the new one: start the smoothing over, and drop the
+        # verdict of sources that are gone.
         self._reset_smoothers()
-        self._sensors_ok = True  # the new source has not failed yet; do not inherit the old verdict
-        logger.info(f"Sensor source is now {getattr(provider, 'name', type(provider).__name__)}")
+        self._source_states = {name: state for name, state in self._source_states.items() if name in self._sources}
+        self._sensors_ok = not self.silent_sources
+        logger.info(f"Reading {', '.join(wanted) or 'no source'}")
 
     @property
     def temp_window(self) -> int:
@@ -213,7 +253,7 @@ class SpeedController:
 
     def _describe_hottest(self) -> str:
         hottest = self._selection.hottest
-        return f"{hottest.label} via {hottest.pattern!r}" if hottest else "no filter matched"
+        return f"{hottest.source}/{hottest.label}" if hottest else "no tracked reading"
 
     def _reset_smoothers(self):
         """A fresh smoother sized to the current window, published with a single assignment."""
@@ -274,8 +314,8 @@ class SpeedController:
                 pass
             self._loop_task = None
 
-        # Set fan to 0 when stopping
-        await self._set_fan_speed(0)
+        # Nothing watches the temperatures any more, so the fan gets the speed that is safe without them.
+        await self._set_fan_speed(CONFIG.control.default_speed)
         self._notify_status()
         logger.info("Control loop stopped")
 
@@ -449,27 +489,27 @@ class SpeedController:
 
         self._connected = True
 
-        # Read temperatures. WMI is blocking, so keep it off the event loop.
-        try:
-            sensors = await asyncio.to_thread(self.sensors.get_temperatures)
-        except Exception as e:  # noqa: BLE001 -- WMI/COM raise arbitrary types; a source error is not a loop error
-            logger.error(f"Error reading sensors: {e}")
-            self._set_sensors_ok(False)
-            return
+        # Every source at once, each in a worker thread: WMI and HTTP block, and one slow source must not
+        # add its wait to the others'.
+        sources = self._sources  # read once: the GUI may replace it mid-tick
+        answers = await asyncio.gather(*(asyncio.to_thread(read_source, provider) for provider in sources.values()))
+        self._readings = {name: readings for name, (_state, readings) in zip(sources, answers, strict=True)}
+        self._source_states = {name: state for name, (state, _readings) in zip(sources, answers, strict=True)}
+        self._set_sensors_ok(not self.silent_sources)
 
-        # An empty result is how every provider reports "I cannot reach my app".
-        self._set_sensors_ok(bool(sensors))
+        tracked = CONFIG.sensors.tracked
+        self._selection = select(self._readings, tracked)
+        raw = self._selection.max_value
+        if raw is None and self._every_tracked_source_sleeps(tracked):
+            raw = 0  # a sleeping GPU is cold, so the curve's floor is right for it; nothing is wrong
 
-        self._selection = select(sensors, filters_for(CONFIG, self.sensors.name))
-        # Nothing matched reads as 0 °C, which holds the fan at the curve's floor; Settings shows which
-        # filters match nothing, so that state is visible rather than silent.
-        raw = self._selection.max_value or 0
-
-        # Round rather than truncate: sources such as the LibreHardwareMonitor web
-        # server report fractions, and int() would bias every reading downwards.
-        self._max_temp = round(self._smoother.add(raw))
-        if raw != self._max_temp:
-            logger.debug(f"Smoothed max {raw} -> {self._max_temp} (median of {self._temp_window})")
+        self._fallback = raw is None
+        if raw is not None:
+            # Round rather than truncate: sources such as the LibreHardwareMonitor web
+            # server report fractions, and int() would bias every reading downwards.
+            self._max_temp = round(self._smoother.add(raw))
+            if raw != self._max_temp:
+                logger.debug(f"Smoothed max {raw} -> {self._max_temp} (median of {self._temp_window})")
         self._notify_temps()
 
         try:
@@ -487,7 +527,10 @@ class SpeedController:
         # Calculate new speed based on mode
         if self._mode == Mode.AUTO:
             ranges = self._ranges  # read once: the GUI may swap it mid-tick
-            new_value = calculate_dimmer_value(self._max_temp, ranges)
+            if self._fallback:
+                new_value = CONFIG.control.default_speed
+            else:
+                new_value = calculate_dimmer_value(self._max_temp, ranges)
 
             # Apply step limits
             if current_dimmer is not None and CONFIG.control.max_step:
@@ -502,19 +545,47 @@ class SpeedController:
 
         # Update speed if changed
         if current_dimmer != new_value:
+            reason = "No tracked reading, default speed" if self._fallback else f"Max: {self._max_temp}"
             logger.info(
-                f"Max: {self._max_temp} ({self._describe_hottest()}). "
-                f"{CONFIG.device.pwm_command}: {current_dimmer} -> {new_value}"
+                f"{reason} ({self._describe_hottest()}). {CONFIG.device.pwm_command}: {current_dimmer} -> {new_value}"
             )
             await self._set_fan_speed(new_value)
         elif current_dimmer is not None:
             self._current_speed = current_dimmer
             self._notify_speed()
 
+    def _every_tracked_source_sleeps(self, tracked) -> bool:
+        """Whether each source with a tracked sensor is asleep, which is why none of them has a reading."""
+        busy = [name for name, labels in tracked.items() if labels]
+        return bool(busy) and all(self._source_states.get(name) is SourceState.ASLEEP for name in busy)
+
     async def shutdown(self):
-        """Shutdown the controller gracefully."""
-        await self.stop()
+        """Shutdown the controller gracefully, leaving the fan at control.default_speed."""
+        if self._running:
+            await self.stop()
+        else:
+            # stop() does nothing for a loop that is not running, but the app's exit still must not leave
+            # the fan at whatever speed it last had, nor at one this app set by hand.
+            await self._set_fan_speed(CONFIG.control.default_speed)
         if self.device.connected:
             await self.device.disconnect()
         self._connected = False
         self._notify_status()
+
+
+def read_source(provider: SensorProvider) -> tuple[SourceState, dict[str, float]]:
+    """Read one source and say how it answered. Blocking, and never raises: one source's fault is not the loop's."""
+    try:
+        readings = plausible(provider.get_temperatures())
+    except Exception as e:  # noqa: BLE001 -- WMI/COM raise arbitrary types; a source error is not a loop error
+        logger.error(f"Error reading {getattr(provider, 'name', type(provider).__name__)}: {e}")
+        return SourceState.SILENT, {}
+
+    if readings:
+        return SourceState.OK, readings
+    if lacks_admin_rights(provider):
+        return SourceState.NEEDS_ADMIN, {}
+    if getattr(provider, "asleep", False):
+        return SourceState.ASLEEP, {}
+    # An empty result is how every source reports "I cannot reach my app".
+    return SourceState.SILENT, {}
