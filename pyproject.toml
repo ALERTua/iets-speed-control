@@ -23,7 +23,7 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff",
     "rust-just",
-    "ty==0.0.90",  # the same version as the ty hook in .pre-commit-config.yaml
+    "ty==0.0.92",  # the same version as the ty hook in .pre-commit-config.yaml
 ]
 
 [tool.uv]
